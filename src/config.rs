@@ -28,9 +28,9 @@ pub struct Config {
     pub linear_api_key: String,
     pub slack_mirror_dir: PathBuf,
     pub linear_mirror_dir: PathBuf,
-    pub llm_api_base: String,
+    pub llm_api_base: Option<String>,
     pub llm_api_key: Option<String>,
-    pub llm_model: String,
+    pub llm_model: Option<String>,
     pub llm_temperature: f32,
 }
 
@@ -63,17 +63,9 @@ pub fn load_config() -> Result<Config> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_LINEAR_MIRROR_DIR));
 
-    let llm_api_base = read_required_env(
-        LLM_API_BASE_VAR,
-        LEGACY_LLM_API_BASE_VAR,
-        "VIBEOS_LLM_API_BASE (legacy LLM_API_BASE) is missing. Set it to an OpenAI-compatible base URL (e.g. https://api.openai.com/v1) or rerun setup.",
-    )?;
+    let llm_api_base = read_optional_env(LLM_API_BASE_VAR, LEGACY_LLM_API_BASE_VAR);
 
-    let llm_model = read_required_env(
-        LLM_MODEL_VAR,
-        LEGACY_LLM_MODEL_VAR,
-        "VIBEOS_LLM_MODEL (legacy LLM_MODEL) is missing. Provide the model identifier to use for triage (e.g. gemma-7b-instruct).",
-    )?;
+    let llm_model = read_optional_env(LLM_MODEL_VAR, LEGACY_LLM_MODEL_VAR);
 
     let llm_api_key = read_optional_env(LLM_API_KEY_VAR, LEGACY_LLM_API_KEY_VAR)
         .map(|key| key.trim().to_owned())

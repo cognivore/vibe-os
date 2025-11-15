@@ -114,6 +114,8 @@ impl SlackClient {
                     let err_str = e.to_string();
                     if err_str.contains("already_in_channel") {
                         println!("already in channel");
+                    } else if err_str.contains("is_archived") {
+                        println!("archived, skipping");
                     } else {
                         println!("✗ failed: {}", e);
                     }
@@ -335,6 +337,11 @@ impl SlackClient {
                             continue; // Retry fetching history
                         }
                         Err(e) => {
+                            let err_str = e.to_string();
+                            if err_str.contains("is_archived") {
+                                println!("  Channel is archived, skipping...");
+                                return Ok(Vec::new());
+                            }
                             println!("  Failed to join channel: {}", e);
                             println!("  (Private channels require manual invitation via /invite @bot_name)");
                             return Err(e);
