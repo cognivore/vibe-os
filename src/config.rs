@@ -9,6 +9,9 @@ const LEGACY_LINEAR_TOKEN_VAR: &str = "LINEAR_API_KEY";
 const MIRROR_DIR_VAR: &str = "VIBEOS_SLACK_MIRROR_DIR";
 const LEGACY_MIRROR_DIR_VAR: &str = "SLACK_MIRROR_DIR";
 const DEFAULT_MIRROR_DIR: &str = "./slack_mirror";
+const LINEAR_MIRROR_DIR_VAR: &str = "LINEAR_MIRROR_DIR";
+const LEGACY_LINEAR_MIRROR_DIR_VAR: &str = "VIBEOS_LINEAR_MIRROR_DIR";
+const DEFAULT_LINEAR_MIRROR_DIR: &str = "./linear_mirror";
 const LLM_API_BASE_VAR: &str = "VIBEOS_LLM_API_BASE";
 const LEGACY_LLM_API_BASE_VAR: &str = "LLM_API_BASE";
 const LLM_API_KEY_VAR: &str = "VIBEOS_LLM_API_KEY";
@@ -24,6 +27,7 @@ pub struct Config {
     pub slack_token: String,
     pub linear_api_key: String,
     pub slack_mirror_dir: PathBuf,
+    pub linear_mirror_dir: PathBuf,
     pub llm_api_base: String,
     pub llm_api_key: Option<String>,
     pub llm_model: String,
@@ -55,6 +59,10 @@ pub fn load_config() -> Result<Config> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_MIRROR_DIR));
 
+    let linear_mirror_dir = read_optional_env(LINEAR_MIRROR_DIR_VAR, LEGACY_LINEAR_MIRROR_DIR_VAR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_LINEAR_MIRROR_DIR));
+
     let llm_api_base = read_required_env(
         LLM_API_BASE_VAR,
         LEGACY_LLM_API_BASE_VAR,
@@ -82,6 +90,7 @@ pub fn load_config() -> Result<Config> {
         slack_token,
         linear_api_key,
         slack_mirror_dir,
+        linear_mirror_dir,
         llm_api_base,
         llm_api_key,
         llm_model,
@@ -112,6 +121,15 @@ pub fn mirror_dir() -> Result<PathBuf> {
     Ok(read_optional_env(MIRROR_DIR_VAR, LEGACY_MIRROR_DIR_VAR)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_MIRROR_DIR)))
+}
+
+pub fn linear_mirror_dir() -> Result<PathBuf> {
+    dotenvy::dotenv().ok();
+    Ok(
+        read_optional_env(LINEAR_MIRROR_DIR_VAR, LEGACY_LINEAR_MIRROR_DIR_VAR)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_LINEAR_MIRROR_DIR)),
+    )
 }
 
 fn read_required_env(var: &str, legacy: &str, err: &str) -> Result<String> {

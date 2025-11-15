@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const LINEAR_API_URL: &str = "https://api.linear.app/graphql";
 const ISSUE_CREATE_MUTATION: &str = r#"
@@ -91,39 +91,14 @@ impl LinearClient {
             input["priority"] = serde_json::json!(prio);
         }
 
-        let request = GraphQLRequest {
-            query: ISSUE_CREATE_MUTATION,
-            variables: serde_json::json!({
-                "input": input
-            }),
-        };
-
-        let response = self
-            .http
-            .post(LINEAR_API_URL)
-            .header("Authorization", &self.api_key)
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send GraphQL request")?;
-
-        let status = response.status();
-        if !status.is_success() {
-            anyhow::bail!("Linear API returned status: {}", status);
-        }
-
-        let resp: GraphQLResponse<IssueCreateResponse> = response
-            .json()
-            .await
-            .context("Failed to parse GraphQL response")?;
-
-        if let Some(errors) = resp.errors {
-            let error_messages: Vec<String> = errors.into_iter().map(|e| e.message).collect();
-            anyhow::bail!("GraphQL errors: {}", error_messages.join(", "));
-        }
-
-        let data = resp.data.context("GraphQL response missing data")?;
+        let data: IssueCreateResponse = self
+            .graphql_query(
+                ISSUE_CREATE_MUTATION,
+                serde_json::json!({
+                    "input": input
+                }),
+            )
+            .await?;
 
         if !data.issue_create.success {
             anyhow::bail!("issueCreate returned success=false");
@@ -140,5 +115,45 @@ impl LinearClient {
             title: issue_data.title,
             url: issue_data.url,
         })
+    }
+
+    pub async fn graphql_query<T>(
+        &self,
+        query: &'static str,
+        variables: serde_json::Value,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let request = GraphQLRequest { query, variables };
+
+        let response = self
+            .http
+            .post(LINEAR_API_URL)
+            .header("Authorization", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send GraphQL request")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("Linear API returned status: {}", status);
+        }
+
+        let resp: GraphQLResponse<T> = response
+            .json()
+            .await
+            .context("Failed to parse GraphQL response")?;
+
+        if let Some(errors) = resp.errors {
+            let error_messages: Vec<String> = errors.into_iter().map(|e| e.message).collect();
+            anyhow::bail!("GraphQL errors: {}", error_messages.join(", "));
+        }
+
+        resp.data
+            .context("GraphQL response missing data")
+            .map_err(Into::into)
     }
 }

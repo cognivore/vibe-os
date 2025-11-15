@@ -10,6 +10,8 @@ use serde_json::json;
 
 use crate::config::Config;
 use crate::haskllm::JSONSchemaSpec;
+use crate::linear_analysis::LinearWindowContext;
+use crate::linear_sync::LinearIssueSnapshot;
 use crate::slack::SlackMessage;
 
 const CONVERSATIONS_DIR: &str = "conversations";
@@ -37,6 +39,36 @@ pub struct LlmSuggestionResponse {
     pub should_create_issues: bool,
     pub reason: String,
     pub issues: Vec<LlmIssueSuggestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmLinearIssueRef {
+    pub identifier: String,
+    pub title: String,
+    pub url: Option<String>,
+    pub status: String,
+    pub team_key: Option<String>,
+    pub assignee: Option<String>,
+    pub priority: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmSlackThreadSuggestion {
+    pub channel_hint: Option<String>,
+    pub title: String,
+    pub message_markdown: String,
+    pub related_issue_identifiers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmLinearWindowSummary {
+    pub window_start: String,
+    pub window_end: String,
+    pub summary_markdown: String,
+    pub key_metrics_markdown: String,
+    pub noteworthy_issues: Vec<LlmLinearIssueRef>,
+    pub stale_issues: Vec<LlmLinearIssueRef>,
+    pub suggested_slack_threads: Vec<LlmSlackThreadSuggestion>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +145,116 @@ impl LlmClient {
             .ok_or_else(|| anyhow!("LLM response did not include message content"))?;
 
         serde_json::from_str::<LlmSuggestionResponse>(&raw_content).with_context(|| {
+            format!(
+                "LLM response was not valid JSON. Snippet: {}",
+                preview(&raw_content)
+            )
+        })
+    }
+
+    pub fn summarize_linear_window(
+        &self,
+        window_context: &LinearWindowContext,
+        _issues: &[LinearIssueSnapshot],
+    ) -> Result<LlmLinearWindowSummary> {
+        let prompt_context = build_window_prompt_context(window_context)?;
+        let prompt = format!(
+            r##"
+You are an assistant that summarizes recent activity in Linear (an issue tracking tool)
+for an engineering team, and suggests Slack threads to communicate key updates.
+
+You will receive compact JSON describing a time window's activity and notable issues.
+Using ONLY that information, produce a SINGLE JSON object with this shape:
+{{
+  "window_start": "ISO string",
+  "window_end": "ISO string",
+  "summary_markdown": "High-level narrative summary in Markdown...",
+  "key_metrics_markdown": "- bullet list of key metrics...",
+  "noteworthy_issues": [
+    {{
+      "identifier": "ENG-123",
+      "title": "Fix login crash",
+      "url": "https://...",
+      "status": "created|completed|reopened|stale|in_progress|...",
+      "team_key": "ENG",
+      "assignee": "Alice",
+      "priority": 2
+    }}
+  ],
+  "stale_issues": [
+    {{
+      "identifier": "ENG-99",
+      "title": "Old untriaged bug",
+      "url": "https://...",
+      "status": "stale",
+      "team_key": "ENG",
+      "assignee": "Bob",
+      "priority": 3
+    }}
+  ],
+  "suggested_slack_threads": [
+    {{
+      "channel_hint": "#engineering or #product, or null if unsure",
+      "title": "Release recap for {{date}}",
+      "message_markdown": "Full Markdown message that could be pasted into Slack...",
+      "related_issue_identifiers": ["ENG-123", "ENG-456"]
+    }}
+  ]
+}}
+
+Rules:
+- Respond with ONE JSON object only. No extra text, no markdown fences.
+- The JSON must parse with standard JSON parsers.
+- Use the input JSON data to drive your summary and suggestions.
+- Summaries should be concise but informative for busy engineers.
+
+Here is the input data for the window you must summarize:
+{prompt_context}
+"##
+        );
+
+        let body = json!({
+            "model": self.model,
+            "temperature": self.temperature,
+            "messages": [
+                {"role": "system", "content": "You are an assistant that writes structured JSON summaries for Linear issue activity."},
+                {"role": "user", "content": prompt}
+            ]
+        });
+
+        let url = format!("{}/chat/completions", self.api_base);
+        let mut request = self
+            .http
+            .post(&url)
+            .header("Content-Type", "application/json");
+
+        if let Some(key) = &self.api_key {
+            request = request.header("Authorization", format!("Bearer {}", key));
+        }
+
+        let response = request
+            .json(&body)
+            .send()
+            .with_context(|| format!("Failed to send chat completion request to {}", url))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body_text = response.text().unwrap_or_default();
+            anyhow::bail!("LLM server returned status {}: {}", status, body_text);
+        }
+
+        let completion: ChatCompletionResponse = response
+            .json()
+            .context("Failed to parse chat completion response JSON")?;
+
+        let raw_content = completion
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|choice| choice.message.content)
+            .ok_or_else(|| anyhow!("LLM response did not include message content"))?;
+
+        serde_json::from_str::<LlmLinearWindowSummary>(&raw_content).with_context(|| {
             format!(
                 "LLM response was not valid JSON. Snippet: {}",
                 preview(&raw_content)
@@ -338,4 +480,48 @@ fn preview(text: &str) -> String {
     } else {
         format!("{}…", &text[..MAX])
     }
+}
+
+fn build_window_prompt_context(window: &LinearWindowContext) -> Result<String> {
+    #[derive(Serialize)]
+    struct WindowPromptContext<'a> {
+        window: &'a LinearWindowContext,
+        top_active_issues: Vec<LinearIssueSummaryPayload>,
+        stale_issues: Vec<LinearIssueSummaryPayload>,
+    }
+
+    #[derive(Serialize)]
+    struct LinearIssueSummaryPayload {
+        identifier: String,
+        title: String,
+        url: Option<String>,
+        team_key: Option<String>,
+        state_name: Option<String>,
+        state_type: Option<String>,
+        assignee_name: Option<String>,
+        priority: Option<i32>,
+        updated_at: String,
+    }
+
+    fn to_payload(issue: &crate::linear_analysis::LinearIssueSummary) -> LinearIssueSummaryPayload {
+        LinearIssueSummaryPayload {
+            identifier: issue.identifier.clone(),
+            title: issue.title.clone(),
+            url: issue.url.clone(),
+            team_key: issue.team_key.clone(),
+            state_name: issue.state_name.clone(),
+            state_type: issue.state_type.clone(),
+            assignee_name: issue.assignee_name.clone(),
+            priority: issue.priority,
+            updated_at: issue.updated_at.to_rfc3339(),
+        }
+    }
+
+    let context = WindowPromptContext {
+        window,
+        top_active_issues: window.top_active_issues.iter().map(to_payload).collect(),
+        stale_issues: window.stale_issues.iter().map(to_payload).collect(),
+    };
+
+    serde_json::to_string(&context).context("Failed to serialize Linear window prompt context")
 }

@@ -1,6 +1,8 @@
 pub mod config;
 pub mod haskllm;
 pub mod linear;
+pub mod linear_analysis;
+pub mod linear_sync;
 pub mod llm;
 pub mod setup;
 pub mod slack;
