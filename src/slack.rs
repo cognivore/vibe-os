@@ -32,7 +32,7 @@ struct SlackConversation {
     is_mpim: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SlackMessage {
     pub ts: String,
     pub user: Option<String>,
