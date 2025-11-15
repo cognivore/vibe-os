@@ -90,7 +90,7 @@ impl LlmClient {
     pub fn new_from_config(cfg: &Config) -> Result<Self> {
         let api_base = cfg.llm_api_base.as_ref()
             .with_context(|| "VIBEOS_LLM_API_BASE (legacy LLM_API_BASE) is missing. Set it to an OpenAI-compatible base URL (e.g. https://api.openai.com/v1) or rerun setup.")?;
-        
+
         let model = cfg.llm_model.as_ref()
             .with_context(|| "VIBEOS_LLM_MODEL (legacy LLM_MODEL) is missing. Provide the model identifier to use for triage (e.g. gemma-7b-instruct).")?;
 
