@@ -283,11 +283,6 @@ impl SlackClient {
         Ok(())
     }
 
-    async fn fetch_conversation_history(&self, channel_id: &str) -> Result<Vec<SlackMessage>> {
-        self.fetch_conversation_history_since(channel_id, None)
-            .await
-    }
-
     async fn fetch_conversation_history_since(
         &self,
         channel_id: &str,
@@ -363,15 +358,6 @@ impl SlackClient {
         }
 
         Ok(all_messages)
-    }
-
-    async fn fetch_thread_replies(
-        &self,
-        channel_id: &str,
-        thread_ts: &str,
-    ) -> Result<Vec<SlackMessage>> {
-        self.fetch_thread_replies_since(channel_id, thread_ts, None)
-            .await
     }
 
     async fn fetch_thread_replies_since(
