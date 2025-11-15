@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -7,6 +8,7 @@ const LINEAR_SECURITY_URL: &str = "https://linear.app/settings/account/security"
 const ENV_FILE: &str = ".env";
 const GITIGNORE_FILE: &str = ".gitignore";
 const DEFAULT_MIRROR_DIR: &str = "./slack_mirror";
+const OPENAI_KEYS_URL: &str = "https://platform.openai.com/settings/organization/api-keys";
 
 pub async fn run_setup() -> Result<()> {
     println!("Welcome to slack-linear setup!");
@@ -56,9 +58,35 @@ pub async fn run_setup() -> Result<()> {
     )?;
     println!();
 
+    // OpenAI GPT-5 key
+    println!("=== OpenAI GPT-5 Setup ===");
+    println!("Opening OpenAI API key management in your browser...");
+    open_url(OPENAI_KEYS_URL, "OpenAI API key page")?;
+    println!();
+
+    let openai_key = prompt_value(
+        "Please paste your OpenAI GPT-5 Responses API key: ",
+        "OpenAI API key",
+    )?;
+    println!();
+
+    // Blood Money / vLLM key
+    println!("=== Blood Money / vLLM Setup ===");
+    println!("Use the Blood Money control panel to retrieve the API key for your deployment.");
+    let blood_money_key = prompt_value(
+        "Please paste your Blood Money API key: ",
+        "Blood Money API key",
+    )?;
+    println!();
+
     // Write .env file
     println!("Writing credentials to .env file...");
-    write_env_file(&slack_token, &linear_key)?;
+    write_env_file(&[
+        ("SLACK_TOKEN", slack_token.as_str()),
+        ("LINEAR_API_KEY", linear_key.as_str()),
+        ("OPENAI_API_KEY", openai_key.as_str()),
+        ("BLOOD_MONEY_API_KEY", blood_money_key.as_str()),
+    ])?;
     ensure_gitignore_contains_env()?;
 
     println!();
@@ -84,14 +112,39 @@ fn prompt_value(prompt: &str, field_name: &str) -> Result<String> {
     Ok(value)
 }
 
-fn write_env_file(slack_token: &str, linear_key: &str) -> Result<()> {
-    let env_content = format!(
-        "SLACK_TOKEN={slack}\nLINEAR_API_KEY={linear}\nSLACK_MIRROR_DIR={mirror}\n",
-        slack = slack_token,
-        linear = linear_key,
-        mirror = DEFAULT_MIRROR_DIR
-    );
-    std::fs::write(ENV_FILE, env_content).context("Failed to write .env file")
+fn write_env_file(entries: &[(&str, &str)]) -> Result<()> {
+    let mut env_map = read_env_file()?;
+    for (key, value) in entries {
+        env_map.insert((*key).to_string(), (*value).to_string());
+    }
+    env_map
+        .entry("SLACK_MIRROR_DIR".into())
+        .or_insert_with(|| DEFAULT_MIRROR_DIR.to_string());
+
+    let mut content = String::new();
+    for (key, value) in env_map {
+        content.push_str(&format!("{key}={value}\n"));
+    }
+    std::fs::write(ENV_FILE, content).context("Failed to write .env file")
+}
+
+fn read_env_file() -> Result<BTreeMap<String, String>> {
+    let path = Path::new(ENV_FILE);
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let data = std::fs::read_to_string(path).context("Failed to read existing .env file")?;
+    let mut map = BTreeMap::new();
+    for line in data.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            map.insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+    Ok(map)
 }
 
 fn ensure_gitignore_contains_env() -> Result<()> {
