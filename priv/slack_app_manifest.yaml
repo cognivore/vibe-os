@@ -1,0 +1,28 @@
+display_information:
+  name: VibeOS Mirror
+  description: Mirror Slack threads locally so VibeOS can triage them into Linear.
+features:
+  bot_user:
+    display_name: VibeOS Mirror Bot
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - channels:join
+      - channels:read
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - mpim:history
+      - mpim:read
+      - reactions:read
+      - users:read
+settings:
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use tokio::time::{sleep, Duration};
 
@@ -137,28 +139,66 @@ impl SlackClient {
             let conv_name = conv.name.as_deref().unwrap_or(&conv.id);
             println!("Mirroring conversation {} ({})...", conv_name, conv.id);
 
-            let messages = self.fetch_conversation_history(&conv.id).await?;
-            println!("  Fetched {} messages", messages.len());
-
             let conversation_path = conversations_dir.join(jsonl_name(&conv.id));
-            write_jsonl(&conversation_path, &messages)?;
-            println!(
-                "  Wrote {} messages to {}",
-                messages.len(),
-                conversation_path.display()
-            );
+            let last_conversation_ts = latest_ts_from_file(&conversation_path)?;
 
-            for msg in &messages {
+            let fetched_messages = self
+                .fetch_conversation_history_since(&conv.id, last_conversation_ts.as_deref())
+                .await?;
+            let new_messages = filter_newer(fetched_messages, last_conversation_ts.as_deref());
+
+            match (last_conversation_ts.is_some(), new_messages.is_empty()) {
+                (_, true) => println!("  Conversation already up to date"),
+                (true, false) => {
+                    append_jsonl(&conversation_path, &new_messages)?;
+                    println!(
+                        "  Appended {} messages to {}",
+                        new_messages.len(),
+                        conversation_path.display()
+                    );
+                }
+                (false, false) => {
+                    write_jsonl(&conversation_path, &new_messages)?;
+                    println!(
+                        "  Wrote {} messages to {}",
+                        new_messages.len(),
+                        conversation_path.display()
+                    );
+                }
+            }
+
+            for msg in &new_messages {
                 if should_fetch_thread(msg) {
                     let thread_ts = msg.thread_ts.as_deref().unwrap_or(&msg.ts);
-                    let replies = self.fetch_thread_replies(&conv.id, thread_ts).await?;
                     let thread_path = threads_dir.join(thread_filename(&conv.id, thread_ts));
-                    write_jsonl(&thread_path, &replies)?;
-                    println!(
-                        "  Wrote {} thread messages to {}",
-                        replies.len(),
-                        thread_path.display()
-                    );
+                    let last_thread_ts = latest_ts_from_file(&thread_path)?;
+
+                    let fetched_replies = self
+                        .fetch_thread_replies_since(&conv.id, thread_ts, last_thread_ts.as_deref())
+                        .await?;
+                    let new_replies = filter_newer(fetched_replies, last_thread_ts.as_deref());
+
+                    match (last_thread_ts.is_some(), new_replies.is_empty()) {
+                        (_, true) => {
+                            println!("  Thread {} already up to date", thread_path.display())
+                        }
+                        (true, false) => {
+                            append_jsonl(&thread_path, &new_replies)?;
+                            println!(
+                                "  Appended {} thread messages to {}",
+                                new_replies.len(),
+                                thread_path.display()
+                            );
+                        }
+                        (false, false) => {
+                            write_jsonl(&thread_path, &new_replies)?;
+                            println!(
+                                "  Wrote {} thread messages to {}",
+                                new_replies.len(),
+                                thread_path.display()
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -219,7 +259,12 @@ impl SlackClient {
                 CONVERSATIONS_JOIN,
             )
             .await
-            .with_context(|| format!("Failed to request conversations.join for channel {}", channel_id))?;
+            .with_context(|| {
+                format!(
+                    "Failed to request conversations.join for channel {}",
+                    channel_id
+                )
+            })?;
 
         let resp: ConversationsJoinResponse = response
             .json()
@@ -239,12 +284,24 @@ impl SlackClient {
     }
 
     async fn fetch_conversation_history(&self, channel_id: &str) -> Result<Vec<SlackMessage>> {
+        self.fetch_conversation_history_since(channel_id, None)
+            .await
+    }
+
+    async fn fetch_conversation_history_since(
+        &self,
+        channel_id: &str,
+        oldest: Option<&str>,
+    ) -> Result<Vec<SlackMessage>> {
         let mut all_messages = Vec::new();
         let mut cursor: Option<String> = None;
         let mut tried_join = false;
 
         loop {
             let mut params = vec![("channel", channel_id)];
+            if let Some(oldest_ts) = oldest {
+                params.push(("oldest", oldest_ts));
+            }
             if let Some(ref c) = cursor {
                 params.push(("cursor", c));
             }
@@ -313,11 +370,24 @@ impl SlackClient {
         channel_id: &str,
         thread_ts: &str,
     ) -> Result<Vec<SlackMessage>> {
+        self.fetch_thread_replies_since(channel_id, thread_ts, None)
+            .await
+    }
+
+    async fn fetch_thread_replies_since(
+        &self,
+        channel_id: &str,
+        thread_ts: &str,
+        oldest: Option<&str>,
+    ) -> Result<Vec<SlackMessage>> {
         let mut all_replies = Vec::new();
         let mut cursor: Option<String> = None;
 
         loop {
             let mut params = vec![("channel", channel_id), ("ts", thread_ts)];
+            if let Some(oldest_ts) = oldest {
+                params.push(("oldest", oldest_ts));
+            }
             if let Some(ref c) = cursor {
                 params.push(("cursor", c));
             }
@@ -408,6 +478,116 @@ fn should_fetch_thread(message: &SlackMessage) -> bool {
         .map(|thread_ts| thread_ts == &message.ts)
         .unwrap_or(false)
         && message.reply_count.unwrap_or(0) > 0
+}
+
+fn read_jsonl<T>(path: &Path) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let file =
+        File::open(path).with_context(|| format!("Failed to open file {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+
+    for (line_idx, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| {
+            format!(
+                "Failed to read line {} from {}",
+                line_idx + 1,
+                path.display()
+            )
+        })?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let entry = serde_json::from_str(&line).with_context(|| {
+            format!(
+                "Failed to deserialize line {} from {}",
+                line_idx + 1,
+                path.display()
+            )
+        })?;
+
+        entries.push(entry);
+    }
+
+    Ok(entries)
+}
+
+fn latest_ts(messages: &[SlackMessage]) -> Option<String> {
+    messages
+        .iter()
+        .max_by(|a, b| compare_ts(&a.ts, &b.ts))
+        .map(|msg| msg.ts.clone())
+}
+
+fn latest_ts_from_file(path: &Path) -> Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let messages: Vec<SlackMessage> = read_jsonl(path)?;
+    Ok(latest_ts(&messages))
+}
+
+fn append_jsonl<T: Serialize>(path: &Path, entries: &[T]) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("Failed to open file {} for appending", path.display()))?;
+
+    let mut writer = BufWriter::new(file);
+    for entry in entries {
+        serde_json::to_writer(&mut writer, entry).with_context(|| {
+            format!(
+                "Failed to serialize entry while appending to {}",
+                path.display()
+            )
+        })?;
+        writer.write_all(b"\n").with_context(|| {
+            format!(
+                "Failed to write newline while appending to {}",
+                path.display()
+            )
+        })?;
+    }
+
+    writer
+        .flush()
+        .with_context(|| format!("Failed to flush {}", path.display()))
+}
+
+fn filter_newer(messages: Vec<SlackMessage>, last_ts: Option<&str>) -> Vec<SlackMessage> {
+    match last_ts {
+        Some(ts) => messages
+            .into_iter()
+            .filter(|msg| compare_ts(&msg.ts, ts) == Ordering::Greater)
+            .collect(),
+        None => messages,
+    }
+}
+
+fn compare_ts(a: &str, b: &str) -> Ordering {
+    match (parse_ts_parts(a), parse_ts_parts(b)) {
+        (Some(a_parts), Some(b_parts)) => a_parts.cmp(&b_parts),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn parse_ts_parts(ts: &str) -> Option<(i64, i64)> {
+    let mut parts = ts.splitn(2, '.');
+    let seconds = parts.next()?.parse().ok()?;
+    let fraction = parts.next().unwrap_or("0").parse().ok()?;
+    Some((seconds, fraction))
 }
 
 fn jsonl_name(stem: &str) -> String {

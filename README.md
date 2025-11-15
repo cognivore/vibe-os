@@ -57,6 +57,11 @@ Creates JSONL files under `SLACK_MIRROR_DIR` (default `./slack_mirror`):
 
 Handles pagination, threaded replies, gzip/brotli, and Slack 429 rate limiting.
 
+The mirror is **incremental and append-only**:
+- Each run inspects existing JSONL files to find the latest Slack `ts` stored per conversation/thread, fetches only newer records via `oldest=...`, and appends them.
+- When Slack has no new activity, rerunning the command is idempotent—the files stay byte-for-byte identical.
+- Because only new timestamps are ingested, edits, deletions, and reaction changes to older messages are ignored; rerun after new posts/replies land to capture the latest context.
+
 ### Create a Linear Issue
 
 ```bash
