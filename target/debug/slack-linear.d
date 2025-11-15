@@ -1,1 +1,0 @@
-/Users/sweater/Github/vibe-os/target/debug/slack-linear: /Users/sweater/Github/vibe-os/src/config.rs /Users/sweater/Github/vibe-os/src/lib.rs /Users/sweater/Github/vibe-os/src/linear.rs /Users/sweater/Github/vibe-os/src/main.rs /Users/sweater/Github/vibe-os/src/setup.rs /Users/sweater/Github/vibe-os/src/slack.rs

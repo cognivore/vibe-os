@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use slack_linear_tools::{config, linear, setup, slack};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -9,48 +10,54 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Setup => {
-            setup::run_setup().await?;
-        }
-        Commands::Slack { slack_cmd } => {
-            match slack_cmd {
-                SlackCommands::Mirror { output_dir } => {
-                    let output_path = output_dir
-                        .unwrap_or_else(|| config::mirror_dir().unwrap_or_else(|_| PathBuf::from("./slack_mirror")));
+        Commands::Setup => setup::run_setup().await,
+        Commands::Slack { slack_cmd } => handle_slack(slack_cmd).await,
+        Commands::Linear { linear_cmd } => handle_linear(linear_cmd).await,
+    }
+}
 
-                    std::fs::create_dir_all(&output_path)
-                        .context("Failed to create output directory")?;
+async fn handle_slack(command: SlackCommands) -> Result<()> {
+    match command {
+        SlackCommands::Mirror { output_dir } => {
+            let output_path = resolve_output_dir(output_dir)?;
+            ensure_directory(&output_path)?;
 
-                    let token = config::slack_token()?;
-                    let client = slack::SlackClient::new(token);
-                    client.mirror_all(&output_path).await?;
-                }
-            }
-        }
-        Commands::Linear { linear_cmd } => {
-            match linear_cmd {
-                LinearCommands::CreateIssue {
-                    team_id,
-                    title,
-                    description,
-                    priority,
-                } => {
-                    let api_key = config::linear_api_key()?;
-                    let client = linear::LinearClient::new(api_key);
-                    let issue = client
-                        .create_issue(&team_id, &title, &description, priority)
-                        .await?;
-
-                    println!("Created issue {} (id={})", issue.identifier, issue.id);
-                    if let Some(url) = issue.url {
-                        println!("  URL: {}", url);
-                    }
-                }
-            }
+            let token = config::slack_token()?;
+            let client = slack::SlackClient::new(token);
+            client.mirror_all(&output_path).await
         }
     }
+}
 
-    Ok(())
+async fn handle_linear(command: LinearCommands) -> Result<()> {
+    match command {
+        LinearCommands::CreateIssue {
+            team_id,
+            title,
+            description,
+            priority,
+        } => {
+            let api_key = config::linear_api_key()?;
+            let client = linear::LinearClient::new(api_key);
+            let issue = client
+                .create_issue(&team_id, &title, &description, priority)
+                .await?;
+
+            println!("Created issue {} (id={})", issue.identifier, issue.id);
+            if let Some(url) = issue.url {
+                println!("  URL: {}", url);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn resolve_output_dir(arg: Option<PathBuf>) -> Result<PathBuf> {
+    arg.map_or_else(config::mirror_dir, Ok)
+}
+
+fn ensure_directory(dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir).with_context(|| format!("Failed to create output directory {:?}", dir))
 }
 
 #[derive(Parser)]
@@ -101,4 +108,3 @@ enum LinearCommands {
         priority: Option<i32>,
     },
 }
-

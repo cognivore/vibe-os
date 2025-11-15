@@ -1,6 +1,21 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+const LINEAR_API_URL: &str = "https://api.linear.app/graphql";
+const ISSUE_CREATE_MUTATION: &str = r#"
+    mutation IssueCreate($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+            success
+            issue {
+                id
+                identifier
+                title
+                url
+            }
+        }
+    }
+"#;
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LinearIssue {
     pub id: String,
@@ -11,7 +26,7 @@ pub struct LinearIssue {
 
 #[derive(Debug, Serialize)]
 struct GraphQLRequest {
-    query: String,
+    query: &'static str,
     variables: serde_json::Value,
 }
 
@@ -27,6 +42,7 @@ struct GraphQLError {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct IssueCreateResponse {
     issue_create: IssueCreateResult,
 }
@@ -65,20 +81,6 @@ impl LinearClient {
         description: &str,
         priority: Option<i32>,
     ) -> Result<LinearIssue> {
-        let mutation = r#"
-            mutation IssueCreate($input: IssueCreateInput!) {
-                issueCreate(input: $input) {
-                    success
-                    issue {
-                        id
-                        identifier
-                        title
-                        url
-                    }
-                }
-            }
-        "#;
-
         let mut input = serde_json::json!({
             "teamId": team_id,
             "title": title,
@@ -90,7 +92,7 @@ impl LinearClient {
         }
 
         let request = GraphQLRequest {
-            query: mutation.to_string(),
+            query: ISSUE_CREATE_MUTATION,
             variables: serde_json::json!({
                 "input": input
             }),
@@ -98,8 +100,8 @@ impl LinearClient {
 
         let response = self
             .http
-            .post("https://api.linear.app/graphql")
-            .header("Authorization", self.api_key.clone())
+            .post(LINEAR_API_URL)
+            .header("Authorization", &self.api_key)
             .header("Content-Type", "application/json")
             .json(&request)
             .send()
@@ -117,21 +119,19 @@ impl LinearClient {
             .context("Failed to parse GraphQL response")?;
 
         if let Some(errors) = resp.errors {
-            let error_messages: Vec<String> = errors
-                .into_iter()
-                .map(|e| e.message)
-                .collect();
+            let error_messages: Vec<String> = errors.into_iter().map(|e| e.message).collect();
             anyhow::bail!("GraphQL errors: {}", error_messages.join(", "));
         }
 
-        let data = resp.data
-            .context("GraphQL response missing data")?;
+        let data = resp.data.context("GraphQL response missing data")?;
 
         if !data.issue_create.success {
             anyhow::bail!("issueCreate returned success=false");
         }
 
-        let issue_data = data.issue_create.issue
+        let issue_data = data
+            .issue_create
+            .issue
             .context("issueCreate did not return an issue")?;
 
         Ok(LinearIssue {
@@ -142,4 +142,3 @@ impl LinearClient {
         })
     }
 }
-

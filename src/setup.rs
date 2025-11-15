@@ -1,5 +1,12 @@
 use anyhow::{Context, Result};
 use std::io::{self, Write};
+use std::path::Path;
+
+const SLACK_APPS_URL: &str = "https://api.slack.com/apps";
+const LINEAR_SECURITY_URL: &str = "https://linear.app/settings/account/security";
+const ENV_FILE: &str = ".env";
+const GITIGNORE_FILE: &str = ".gitignore";
+const DEFAULT_MIRROR_DIR: &str = "./slack_mirror";
 
 pub async fn run_setup() -> Result<()> {
     println!("Welcome to slack-linear setup!");
@@ -15,8 +22,7 @@ pub async fn run_setup() -> Result<()> {
     // Slack token step
     println!("=== Slack Token Setup ===");
     println!("Opening Slack app dashboard in your browser...");
-    open::that("https://api.slack.com/apps")
-        .context("Failed to open Slack app dashboard in browser")?;
+    open_url(SLACK_APPS_URL, "Slack app dashboard")?;
 
     println!();
     println!("Instructions:");
@@ -27,23 +33,16 @@ pub async fn run_setup() -> Result<()> {
     println!("  4. Generate a Bot/User OAuth token");
     println!();
 
-    print!("Please paste your Slack OAuth token (starting with xox...): ");
-    io::stdout().flush()?;
-    let mut slack_token = String::new();
-    io::stdin().read_line(&mut slack_token)?;
-    let slack_token = slack_token.trim();
-
-    if slack_token.is_empty() {
-        anyhow::bail!("Slack token cannot be empty");
-    }
-
+    let slack_token = prompt_value(
+        "Please paste your Slack OAuth token (starting with xox...): ",
+        "Slack token",
+    )?;
     println!();
 
     // Linear API key step
     println!("=== Linear API Key Setup ===");
     println!("Opening Linear personal API key page in your browser...");
-    open::that("https://linear.app/settings/account/security")
-        .context("Failed to open Linear API key page in browser")?;
+    open_url(LINEAR_SECURITY_URL, "Linear API key page")?;
 
     println!();
     println!("Instructions:");
@@ -51,45 +50,16 @@ pub async fn run_setup() -> Result<()> {
     println!("  2. Grant it permissions to create issues");
     println!();
 
-    print!("Please paste your Linear personal API key: ");
-    io::stdout().flush()?;
-    let mut linear_key = String::new();
-    io::stdin().read_line(&mut linear_key)?;
-    let linear_key = linear_key.trim();
-
-    if linear_key.is_empty() {
-        anyhow::bail!("Linear API key cannot be empty");
-    }
-
+    let linear_key = prompt_value(
+        "Please paste your Linear personal API key: ",
+        "Linear API key",
+    )?;
     println!();
 
     // Write .env file
     println!("Writing credentials to .env file...");
-    let env_content = format!(
-        "SLACK_TOKEN={}\nLINEAR_API_KEY={}\nSLACK_MIRROR_DIR=./slack_mirror\n",
-        slack_token, linear_key
-    );
-    std::fs::write(".env", env_content)
-        .context("Failed to write .env file")?;
-
-    // Ensure .gitignore contains .env
-    let gitignore_path = ".gitignore";
-    if std::path::Path::new(gitignore_path).exists() {
-        let mut gitignore_content = std::fs::read_to_string(gitignore_path)
-            .context("Failed to read .gitignore")?;
-
-        if !gitignore_content.contains(".env") {
-            if !gitignore_content.ends_with('\n') {
-                gitignore_content.push('\n');
-            }
-            gitignore_content.push_str(".env\n");
-            std::fs::write(gitignore_path, gitignore_content)
-                .context("Failed to update .gitignore")?;
-        }
-    } else {
-        std::fs::write(gitignore_path, ".env\n")
-            .context("Failed to create .gitignore")?;
-    }
+    write_env_file(&slack_token, &linear_key)?;
+    ensure_gitignore_contains_env()?;
 
     println!();
     println!("✓ Setup complete!");
@@ -100,3 +70,48 @@ pub async fn run_setup() -> Result<()> {
     Ok(())
 }
 
+fn prompt_value(prompt: &str, field_name: &str) -> Result<String> {
+    print!("{prompt}");
+    io::stdout().flush().context("Failed to flush stdout")?;
+    let mut buffer = String::new();
+    io::stdin()
+        .read_line(&mut buffer)
+        .context("Failed to read input")?;
+    let value = buffer.trim().to_owned();
+    if value.is_empty() {
+        anyhow::bail!("{field_name} cannot be empty");
+    }
+    Ok(value)
+}
+
+fn write_env_file(slack_token: &str, linear_key: &str) -> Result<()> {
+    let env_content = format!(
+        "SLACK_TOKEN={slack}\nLINEAR_API_KEY={linear}\nSLACK_MIRROR_DIR={mirror}\n",
+        slack = slack_token,
+        linear = linear_key,
+        mirror = DEFAULT_MIRROR_DIR
+    );
+    std::fs::write(ENV_FILE, env_content).context("Failed to write .env file")
+}
+
+fn ensure_gitignore_contains_env() -> Result<()> {
+    let path = Path::new(GITIGNORE_FILE);
+    if path.exists() {
+        let mut content = std::fs::read_to_string(path).context("Failed to read .gitignore")?;
+        if !content.lines().any(|line| line.trim() == ENV_FILE) {
+            if !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(ENV_FILE);
+            content.push('\n');
+            std::fs::write(path, content).context("Failed to update .gitignore")?;
+        }
+    } else {
+        std::fs::write(path, format!("{ENV_FILE}\n")).context("Failed to create .gitignore")?;
+    }
+    Ok(())
+}
+
+fn open_url(url: &str, description: &str) -> Result<()> {
+    open::that(url).with_context(|| format!("Failed to open {description} in browser"))
+}

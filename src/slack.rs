@@ -1,8 +1,22 @@
 use anyhow::{Context, Result};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::io::Write;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::Path;
+use tokio::time::{sleep, Duration};
+
+const API_BASE: &str = "https://slack.com/api/";
+const CONVERSATIONS_LIST: &str = "conversations.list";
+const CONVERSATIONS_HISTORY: &str = "conversations.history";
+const CONVERSATIONS_REPLIES: &str = "conversations.replies";
+const CONVERSATION_TYPES: &str = "public_channel,private_channel,im,mpim";
+const DEFAULT_RETRY_AFTER_SECS: u64 = 60;
+const CONVERSATIONS_DIR: &str = "conversations";
+const THREADS_DIR: &str = "threads";
+const JSONL_EXTENSION: &str = "jsonl";
 
 #[derive(Debug, Deserialize)]
 struct SlackConversation {
@@ -27,7 +41,7 @@ pub struct SlackMessage {
     pub reply_count: Option<u32>,
     pub subtype: Option<String>,
     #[serde(flatten)]
-    pub extra: HashMap<String, serde_json::Value>,
+    pub extra: HashMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,7 +55,6 @@ struct ConversationsListResponse {
 struct ConversationsHistoryResponse {
     ok: bool,
     messages: Vec<SlackMessage>,
-    has_more: bool,
     response_metadata: Option<ResponseMetadata>,
 }
 
@@ -49,7 +62,6 @@ struct ConversationsHistoryResponse {
 struct ConversationsRepliesResponse {
     ok: bool,
     messages: Vec<SlackMessage>,
-    has_more: bool,
     response_metadata: Option<ResponseMetadata>,
 }
 
@@ -72,15 +84,12 @@ impl SlackClient {
     }
 
     pub async fn mirror_all(&self, output_dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(output_dir)
-            .context("Failed to create output directory")?;
+        ensure_dir(output_dir)?;
 
-        let conversations_dir = output_dir.join("conversations");
-        let threads_dir = output_dir.join("threads");
-        std::fs::create_dir_all(&conversations_dir)
-            .context("Failed to create conversations directory")?;
-        std::fs::create_dir_all(&threads_dir)
-            .context("Failed to create threads directory")?;
+        let conversations_dir = output_dir.join(CONVERSATIONS_DIR);
+        let threads_dir = output_dir.join(THREADS_DIR);
+        ensure_dir(&conversations_dir)?;
+        ensure_dir(&threads_dir)?;
 
         let conversations = self.list_all_conversations().await?;
         println!("Found {} conversations to mirror", conversations.len());
@@ -92,42 +101,25 @@ impl SlackClient {
             let messages = self.fetch_conversation_history(&conv.id).await?;
             println!("  Fetched {} messages", messages.len());
 
-            let file_path = conversations_dir.join(format!("{}.jsonl", conv.id));
-            let file = std::fs::File::create(&file_path)
-                .with_context(|| format!("Failed to create file: {:?}", file_path))?;
-            let mut writer = std::io::BufWriter::new(file);
+            let conversation_path = conversations_dir.join(jsonl_name(&conv.id));
+            write_jsonl(&conversation_path, &messages)?;
+            println!(
+                "  Wrote {} messages to {}",
+                messages.len(),
+                conversation_path.display()
+            );
 
             for msg in &messages {
-                serde_json::to_writer(&mut writer, msg)
-                    .context("Failed to serialize message")?;
-                writer.write_all(b"\n")
-                    .context("Failed to write newline")?;
-            }
-            writer.flush()
-                .context("Failed to flush file")?;
-
-            println!("  Wrote {} messages to {:?}", messages.len(), file_path);
-
-            // Fetch threads for messages that have replies
-            for msg in &messages {
-                if let Some(thread_ts) = &msg.thread_ts {
-                    if msg.ts == *thread_ts && msg.reply_count.unwrap_or(0) > 0 {
-                        if let Ok(replies) = self.fetch_thread_replies(&conv.id, thread_ts).await {
-                            let thread_file = threads_dir.join(format!("{}_{}.jsonl", conv.id, thread_ts));
-                            let thread_file_handle = std::fs::File::create(&thread_file)
-                                .with_context(|| format!("Failed to create thread file: {:?}", thread_file))?;
-                            let mut thread_writer = std::io::BufWriter::new(thread_file_handle);
-
-                            for reply in &replies {
-                                serde_json::to_writer(&mut thread_writer, reply)
-                                    .context("Failed to serialize reply")?;
-                                thread_writer.write_all(b"\n")
-                                    .context("Failed to write newline")?;
-                            }
-                            thread_writer.flush()
-                                .context("Failed to flush thread file")?;
-                        }
-                    }
+                if should_fetch_thread(msg) {
+                    let thread_ts = msg.thread_ts.as_deref().unwrap_or(&msg.ts);
+                    let replies = self.fetch_thread_replies(&conv.id, thread_ts).await?;
+                    let thread_path = threads_dir.join(thread_filename(&conv.id, thread_ts));
+                    write_jsonl(&thread_path, &replies)?;
+                    println!(
+                        "  Wrote {} thread messages to {}",
+                        replies.len(),
+                        thread_path.display()
+                    );
                 }
             }
         }
@@ -140,38 +132,20 @@ impl SlackClient {
         let mut cursor: Option<String> = None;
 
         loop {
-            let mut params = vec![
-                ("types", "public_channel,private_channel,im,mpim"),
-            ];
+            let mut params = vec![("types", CONVERSATION_TYPES)];
             if let Some(ref c) = cursor {
                 params.push(("cursor", c));
             }
 
             let response = self
-                .http
-                .get("https://slack.com/api/conversations.list")
-                .header("Authorization", format!("Bearer {}", self.token))
-                .query(&params)
-                .send()
-                .await
-                .context("Failed to send request to conversations.list")?;
-
-            let status = response.status();
-            if status == 429 {
-                let retry_after = response
-                    .headers()
-                    .get("Retry-After")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(60);
-                println!("Rate limited. Waiting {} seconds...", retry_after);
-                tokio::time::sleep(tokio::time::Duration::from_secs(retry_after)).await;
-                continue;
-            }
-
-            if !status.is_success() {
-                anyhow::bail!("conversations.list returned status: {}", status);
-            }
+                .execute_request(
+                    self.http
+                        .get(api_url(CONVERSATIONS_LIST))
+                        .header("Authorization", format!("Bearer {}", self.token))
+                        .query(&params),
+                    CONVERSATIONS_LIST,
+                )
+                .await?;
 
             let resp: ConversationsListResponse = response
                 .json()
@@ -183,10 +157,7 @@ impl SlackClient {
             }
 
             all_conversations.extend(resp.channels);
-
-            cursor = resp.response_metadata
-                .and_then(|m| m.next_cursor)
-                .filter(|c| !c.is_empty());
+            cursor = next_cursor(resp.response_metadata);
 
             if cursor.is_none() {
                 break;
@@ -207,30 +178,20 @@ impl SlackClient {
             }
 
             let response = self
-                .http
-                .get("https://slack.com/api/conversations.history")
-                .header("Authorization", format!("Bearer {}", self.token))
-                .query(&params)
-                .send()
+                .execute_request(
+                    self.http
+                        .get(api_url(CONVERSATIONS_HISTORY))
+                        .header("Authorization", format!("Bearer {}", self.token))
+                        .query(&params),
+                    CONVERSATIONS_HISTORY,
+                )
                 .await
-                .with_context(|| format!("Failed to send request to conversations.history for {}", channel_id))?;
-
-            let status = response.status();
-            if status == 429 {
-                let retry_after = response
-                    .headers()
-                    .get("Retry-After")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(60);
-                println!("Rate limited. Waiting {} seconds...", retry_after);
-                tokio::time::sleep(tokio::time::Duration::from_secs(retry_after)).await;
-                continue;
-            }
-
-            if !status.is_success() {
-                anyhow::bail!("conversations.history returned status: {}", status);
-            }
+                .with_context(|| {
+                    format!(
+                        "Failed to request conversations.history for channel {}",
+                        channel_id
+                    )
+                })?;
 
             let resp: ConversationsHistoryResponse = response
                 .json()
@@ -242,14 +203,7 @@ impl SlackClient {
             }
 
             all_messages.extend(resp.messages);
-
-            if !resp.has_more {
-                break;
-            }
-
-            cursor = resp.response_metadata
-                .and_then(|m| m.next_cursor)
-                .filter(|c| !c.is_empty());
+            cursor = next_cursor(resp.response_metadata);
 
             if cursor.is_none() {
                 break;
@@ -259,44 +213,35 @@ impl SlackClient {
         Ok(all_messages)
     }
 
-    async fn fetch_thread_replies(&self, channel_id: &str, thread_ts: &str) -> Result<Vec<SlackMessage>> {
+    async fn fetch_thread_replies(
+        &self,
+        channel_id: &str,
+        thread_ts: &str,
+    ) -> Result<Vec<SlackMessage>> {
         let mut all_replies = Vec::new();
         let mut cursor: Option<String> = None;
 
         loop {
-            let mut params = vec![
-                ("channel", channel_id),
-                ("ts", thread_ts),
-            ];
+            let mut params = vec![("channel", channel_id), ("ts", thread_ts)];
             if let Some(ref c) = cursor {
                 params.push(("cursor", c));
             }
 
             let response = self
-                .http
-                .get("https://slack.com/api/conversations.replies")
-                .header("Authorization", format!("Bearer {}", self.token))
-                .query(&params)
-                .send()
+                .execute_request(
+                    self.http
+                        .get(api_url(CONVERSATIONS_REPLIES))
+                        .header("Authorization", format!("Bearer {}", self.token))
+                        .query(&params),
+                    CONVERSATIONS_REPLIES,
+                )
                 .await
-                .with_context(|| format!("Failed to send request to conversations.replies for {} {}", channel_id, thread_ts))?;
-
-            let status = response.status();
-            if status == 429 {
-                let retry_after = response
-                    .headers()
-                    .get("Retry-After")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(60);
-                println!("Rate limited. Waiting {} seconds...", retry_after);
-                tokio::time::sleep(tokio::time::Duration::from_secs(retry_after)).await;
-                continue;
-            }
-
-            if !status.is_success() {
-                anyhow::bail!("conversations.replies returned status: {}", status);
-            }
+                .with_context(|| {
+                    format!(
+                        "Failed to request conversations.replies for channel {} thread {}",
+                        channel_id, thread_ts
+                    )
+                })?;
 
             let resp: ConversationsRepliesResponse = response
                 .json()
@@ -308,14 +253,7 @@ impl SlackClient {
             }
 
             all_replies.extend(resp.messages);
-
-            if !resp.has_more {
-                break;
-            }
-
-            cursor = resp.response_metadata
-                .and_then(|m| m.next_cursor)
-                .filter(|c| !c.is_empty());
+            cursor = next_cursor(resp.response_metadata);
 
             if cursor.is_none() {
                 break;
@@ -324,5 +262,99 @@ impl SlackClient {
 
         Ok(all_replies)
     }
+
+    async fn execute_request(
+        &self,
+        builder: reqwest::RequestBuilder,
+        label: &str,
+    ) -> Result<reqwest::Response> {
+        let base_builder = builder;
+
+        loop {
+            let request = base_builder
+                .try_clone()
+                .context("Unable to clone Slack request for retry")?;
+
+            let response = request
+                .send()
+                .await
+                .with_context(|| format!("Failed to send {}", label))?;
+
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                let wait = retry_after(&response);
+                println!(
+                    "Rate limited on {}. Waiting {}s before retrying...",
+                    label,
+                    wait.as_secs()
+                );
+                sleep(wait).await;
+                continue;
+            }
+
+            if !response.status().is_success() {
+                anyhow::bail!("{} returned status: {}", label, response.status());
+            }
+
+            return Ok(response);
+        }
+    }
 }
 
+fn should_fetch_thread(message: &SlackMessage) -> bool {
+    message
+        .thread_ts
+        .as_ref()
+        .map(|thread_ts| thread_ts == &message.ts)
+        .unwrap_or(false)
+        && message.reply_count.unwrap_or(0) > 0
+}
+
+fn jsonl_name(stem: &str) -> String {
+    format!("{}.{}", stem, JSONL_EXTENSION)
+}
+
+fn thread_filename(channel_id: &str, thread_ts: &str) -> String {
+    let sanitized_ts = thread_ts.replace('.', "_");
+    format!("{}_{}.{}", channel_id, sanitized_ts, JSONL_EXTENSION)
+}
+
+fn ensure_dir(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)
+        .with_context(|| format!("Failed to create directory {}", path.display()))
+}
+
+fn write_jsonl<T: Serialize>(path: &Path, entries: &[T]) -> Result<()> {
+    let file =
+        File::create(path).with_context(|| format!("Failed to create file {}", path.display()))?;
+    let mut writer = BufWriter::new(file);
+    for entry in entries {
+        serde_json::to_writer(&mut writer, entry)
+            .with_context(|| format!("Failed to serialize entry to {}", path.display()))?;
+        writer
+            .write_all(b"\n")
+            .with_context(|| format!("Failed to write newline to {}", path.display()))?;
+    }
+    writer
+        .flush()
+        .with_context(|| format!("Failed to flush {}", path.display()))
+}
+
+fn api_url(endpoint: &str) -> String {
+    format!("{API_BASE}{endpoint}")
+}
+
+fn next_cursor(metadata: Option<ResponseMetadata>) -> Option<String> {
+    metadata
+        .and_then(|meta| meta.next_cursor)
+        .filter(|cursor| !cursor.is_empty())
+}
+
+fn retry_after(response: &reqwest::Response) -> Duration {
+    response
+        .headers()
+        .get("Retry-After")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_RETRY_AFTER_SECS))
+}
