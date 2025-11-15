@@ -1,0 +1,8 @@
+/Users/sweater/Github/vibe-os/target/debug/deps/percent_encoding-00df85cfd2dc38dd.d: /Users/sweater/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/percent-encoding-2.3.2/src/lib.rs /Users/sweater/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/percent-encoding-2.3.2/src/ascii_set.rs
+
+/Users/sweater/Github/vibe-os/target/debug/deps/libpercent_encoding-00df85cfd2dc38dd.rlib: /Users/sweater/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/percent-encoding-2.3.2/src/lib.rs /Users/sweater/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/percent-encoding-2.3.2/src/ascii_set.rs
+
+/Users/sweater/Github/vibe-os/target/debug/deps/libpercent_encoding-00df85cfd2dc38dd.rmeta: /Users/sweater/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/percent-encoding-2.3.2/src/lib.rs /Users/sweater/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/percent-encoding-2.3.2/src/ascii_set.rs
+
+/Users/sweater/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/percent-encoding-2.3.2/src/lib.rs:
+/Users/sweater/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/percent-encoding-2.3.2/src/ascii_set.rs:
