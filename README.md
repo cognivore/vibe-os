@@ -1,6 +1,6 @@
-## Slack Linear Tools
+## VibeOS
 
-Async Rust toolkit that mirrors Slack conversations to local JSONL archives and creates Linear issues from the terminal. Ships as both a library and the `slack-linear` CLI.
+Async Rust toolkit that mirrors Slack conversations to local JSONL archives and creates Linear issues from the terminal. Ships as both a library and the `vibeos` CLI.
 
 ---
 
@@ -23,18 +23,20 @@ Async Rust toolkit that mirrors Slack conversations to local JSONL archives and 
    direnv allow
    ```
 
-2. Run the interactive setup command to collect credentials:
+2. Import the Slack app manifest found at `priv/slack_app_manifest.yaml` (Slack → **Your Apps** → **Create New App** → **From manifest**). Review the scopes before installing the app into your workspace.
+
+3. Run the interactive setup command to collect credentials:
    ```bash
-   cargo run -- slack-linear setup
+   cargo run -- setup
    ```
    - Opens Slack app dashboard (`https://api.slack.com/apps`)
    - Opens Linear security page (`https://linear.app/settings/account/security`)
    - Opens OpenAI API key management (`https://platform.openai.com/settings/organization/api-keys`)
    - Prompts for the OpenAI GPT-5 key (`OPENAI_API_KEY`) and Blood Money / vLLM key (`BLOOD_MONEY_API_KEY`)
-   - Persists all values plus `SLACK_MIRROR_DIR` into `.env`, merging with any existing entries
+   - Persists all values plus `VIBEOS_SLACK_MIRROR_DIR` into `.env`, merging with any existing entries
    - Ensures `.env` is git-ignored
 
-You can re-run `slack-linear setup` anytime to rotate credentials.
+You can re-run `vibeos setup` (or `cargo run -- setup`) anytime to rotate credentials.
 
 ---
 
@@ -43,10 +45,11 @@ You can re-run `slack-linear setup` anytime to rotate credentials.
 ### Mirror Slack
 
 ```bash
-cargo run -- slack-linear slack mirror
+cargo run -- slack mirror
 # or specify a destination
-cargo run -- slack-linear slack mirror --output-dir /path/to/archive
+cargo run -- slack mirror --output-dir /path/to/archive
 ```
+After installation, invoke `vibeos slack mirror ...` directly.
 
 Creates JSONL files under `SLACK_MIRROR_DIR` (default `./slack_mirror`):
 - `conversations/<channel_id>.jsonl`
@@ -57,7 +60,7 @@ Handles pagination, threaded replies, gzip/brotli, and Slack 429 rate limiting.
 ### Create a Linear Issue
 
 ```bash
-cargo run -- slack-linear linear create-issue \
+cargo run -- linear create-issue \
   --team-id <TEAM_UUID> \
   --title "Bug title" \
   --description "Short repro" \
@@ -65,6 +68,7 @@ cargo run -- slack-linear linear create-issue \
 ```
 
 Prints the issue identifier and URL on success.
+After installation, invoke `vibeos linear create-issue ...` directly.
 
 ---
 
@@ -90,12 +94,16 @@ Prints the issue identifier and URL on success.
 
 | Variable               | Description                                                    | Default                                     |
 |------------------------|----------------------------------------------------------------|---------------------------------------------|
-| `SLACK_TOKEN`          | Slack OAuth token with read scopes                             | *required*                                  |
-| `LINEAR_API_KEY`       | Linear personal API key                                        | *required*                                  |
+| `VIBEOS_SLACK_TOKEN` (legacy `SLACK_TOKEN`) | Slack OAuth token with read scopes            | *required*                                  |
+| `VIBEOS_LINEAR_API_KEY` (legacy `LINEAR_API_KEY`) | Linear personal API key                     | *required*                                  |
 | `OPENAI_API_KEY`       | OpenAI GPT-5 Responses API key                                 | *required for HaskLLM OpenAI provider*      |
 | `BLOOD_MONEY_API_KEY`  | Blood Money (vLLM/Qwen) API key                                | *required for HaskLLM Qwen provider*        |
 | `BLOOD_MONEY_BASE_URL` | Override base URL for Blood Money deployment                   | `https://outland-dev-1.doubling-season.geosurge.ai` |
-| `SLACK_MIRROR_DIR`     | Mirror directory for Slack archives                            | `./slack_mirror`                            |
+| `VIBEOS_SLACK_MIRROR_DIR` (legacy `SLACK_MIRROR_DIR`) | Mirror directory for Slack archives | `./slack_mirror`                            |
+| `VIBEOS_LLM_API_BASE` (legacy `LLM_API_BASE`) | OpenAI-compatible base URL             | *required*                                  |
+| `VIBEOS_LLM_API_KEY` (legacy `LLM_API_KEY`) | Optional bearer token for LLM endpoint | _(none)_                                    |
+| `VIBEOS_LLM_MODEL` (legacy `LLM_MODEL`) | Model identifier to call                | *required*                                  |
+| `VIBEOS_LLM_TEMPERATURE` (legacy `LLM_TEMPERATURE`) | Sampling temperature                 | `0.2`                                       |
 
 These are loaded via `dotenvy`; the CLI will error with guidance if any are missing.
 
@@ -115,7 +123,7 @@ All providers honor `RequestConfig` for retries/timeouts and pull credentials fr
 
 ## Troubleshooting
 
-- **Missing tokens**: Rerun `slack-linear setup`.
+- **Missing tokens**: Rerun `vibeos setup`.
 - **Permission errors**: Ensure the Slack app has `conversations.history`, `im:history`, etc., and that the Linear key can create issues in the target team.
 - **429 rate limits**: The Slack client waits the `Retry-After` duration automatically; rerun later if limits persist.
 

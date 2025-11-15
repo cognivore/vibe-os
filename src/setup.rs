@@ -11,7 +11,7 @@ const DEFAULT_MIRROR_DIR: &str = "./slack_mirror";
 const OPENAI_KEYS_URL: &str = "https://platform.openai.com/settings/organization/api-keys";
 
 pub async fn run_setup() -> Result<()> {
-    println!("Welcome to slack-linear setup!");
+    println!("Welcome to vibeos setup!");
     println!();
     println!("This tool will help you configure:");
     println!("  - A Slack token with broad read access");
@@ -82,8 +82,8 @@ pub async fn run_setup() -> Result<()> {
     // Write .env file
     println!("Writing credentials to .env file...");
     write_env_file(&[
-        ("SLACK_TOKEN", slack_token.as_str()),
-        ("LINEAR_API_KEY", linear_key.as_str()),
+        ("VIBEOS_SLACK_TOKEN", slack_token.as_str()),
+        ("VIBEOS_LINEAR_API_KEY", linear_key.as_str()),
         ("OPENAI_API_KEY", openai_key.as_str()),
         ("BLOOD_MONEY_API_KEY", blood_money_key.as_str()),
     ])?;
@@ -92,8 +92,8 @@ pub async fn run_setup() -> Result<()> {
     println!();
     println!("✓ Setup complete!");
     println!("You can now run:");
-    println!("  - `slack-linear slack mirror` to mirror Slack conversations");
-    println!("  - `slack-linear linear create-issue` to create Linear issues");
+    println!("  - `vibeos slack mirror` to mirror Slack conversations");
+    println!("  - `vibeos linear create-issue` to create Linear issues");
 
     Ok(())
 }
@@ -118,7 +118,7 @@ fn write_env_file(entries: &[(&str, &str)]) -> Result<()> {
         env_map.insert((*key).to_string(), (*value).to_string());
     }
     env_map
-        .entry("SLACK_MIRROR_DIR".into())
+        .entry("VIBEOS_SLACK_MIRROR_DIR".into())
         .or_insert_with(|| DEFAULT_MIRROR_DIR.to_string());
 
     let mut content = String::new();

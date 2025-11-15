@@ -12,6 +12,7 @@ const API_BASE: &str = "https://slack.com/api/";
 const CONVERSATIONS_LIST: &str = "conversations.list";
 const CONVERSATIONS_HISTORY: &str = "conversations.history";
 const CONVERSATIONS_REPLIES: &str = "conversations.replies";
+const CONVERSATIONS_JOIN: &str = "conversations.join";
 const CONVERSATION_TYPES: &str = "public_channel,private_channel,im,mpim";
 const DEFAULT_RETRY_AFTER_SECS: u64 = 60;
 const CONVERSATIONS_DIR: &str = "conversations";
@@ -47,22 +48,31 @@ pub struct SlackMessage {
 #[derive(Debug, Deserialize)]
 struct ConversationsListResponse {
     ok: bool,
-    channels: Vec<SlackConversation>,
+    channels: Option<Vec<SlackConversation>>,
     response_metadata: Option<ResponseMetadata>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ConversationsHistoryResponse {
     ok: bool,
-    messages: Vec<SlackMessage>,
+    messages: Option<Vec<SlackMessage>>,
     response_metadata: Option<ResponseMetadata>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ConversationsRepliesResponse {
     ok: bool,
-    messages: Vec<SlackMessage>,
+    messages: Option<Vec<SlackMessage>>,
     response_metadata: Option<ResponseMetadata>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConversationsJoinResponse {
+    ok: bool,
+    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,6 +91,35 @@ impl SlackClient {
             http: reqwest::Client::new(),
             token,
         }
+    }
+
+    pub async fn join_all_public_channels(&self) -> Result<()> {
+        let conversations = self.list_all_conversations().await?;
+        let public_channels: Vec<_> = conversations
+            .iter()
+            .filter(|c| c.is_channel.unwrap_or(false) && !c.is_group.unwrap_or(false))
+            .collect();
+
+        println!("Found {} public channels", public_channels.len());
+
+        for conv in &public_channels {
+            let conv_name = conv.name.as_deref().unwrap_or(&conv.id);
+            print!("Joining {} ({})... ", conv_name, conv.id);
+
+            match self.join_channel(&conv.id).await {
+                Ok(()) => println!("✓ joined"),
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if err_str.contains("already_in_channel") {
+                        println!("already in channel");
+                    } else {
+                        println!("✗ failed: {}", e);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn mirror_all(&self, output_dir: &Path) -> Result<()> {
@@ -153,10 +192,11 @@ impl SlackClient {
                 .context("Failed to parse conversations.list response")?;
 
             if !resp.ok {
-                anyhow::bail!("conversations.list returned ok=false");
+                let error_msg = resp.error.as_deref().unwrap_or("unknown error");
+                anyhow::bail!("conversations.list returned ok=false: {}", error_msg);
             }
 
-            all_conversations.extend(resp.channels);
+            all_conversations.extend(resp.channels.unwrap_or_default());
             cursor = next_cursor(resp.response_metadata);
 
             if cursor.is_none() {
@@ -167,9 +207,41 @@ impl SlackClient {
         Ok(all_conversations)
     }
 
+    async fn join_channel(&self, channel_id: &str) -> Result<()> {
+        let params = vec![("channel", channel_id)];
+
+        let response = self
+            .execute_request(
+                self.http
+                    .post(api_url(CONVERSATIONS_JOIN))
+                    .header("Authorization", format!("Bearer {}", self.token))
+                    .query(&params),
+                CONVERSATIONS_JOIN,
+            )
+            .await
+            .with_context(|| format!("Failed to request conversations.join for channel {}", channel_id))?;
+
+        let resp: ConversationsJoinResponse = response
+            .json()
+            .await
+            .context("Failed to parse conversations.join response")?;
+
+        if !resp.ok {
+            let error_msg = resp.error.as_deref().unwrap_or("unknown error");
+            anyhow::bail!(
+                "conversations.join returned ok=false: {} (channel: {})",
+                error_msg,
+                channel_id
+            );
+        }
+
+        Ok(())
+    }
+
     async fn fetch_conversation_history(&self, channel_id: &str) -> Result<Vec<SlackMessage>> {
         let mut all_messages = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut tried_join = false;
 
         loop {
             let mut params = vec![("channel", channel_id)];
@@ -199,10 +271,33 @@ impl SlackClient {
                 .context("Failed to parse conversations.history response")?;
 
             if !resp.ok {
-                anyhow::bail!("conversations.history returned ok=false");
+                let error_msg = resp.error.as_deref().unwrap_or("unknown error");
+
+                // If not in channel and haven't tried joining yet, try to join
+                if error_msg == "not_in_channel" && !tried_join {
+                    println!("  Not in channel, attempting to join...");
+                    match self.join_channel(channel_id).await {
+                        Ok(()) => {
+                            println!("  Successfully joined channel");
+                            tried_join = true;
+                            continue; // Retry fetching history
+                        }
+                        Err(e) => {
+                            println!("  Failed to join channel: {}", e);
+                            println!("  (Private channels require manual invitation via /invite @bot_name)");
+                            return Err(e);
+                        }
+                    }
+                }
+
+                anyhow::bail!(
+                    "conversations.history returned ok=false: {} (channel: {})",
+                    error_msg,
+                    channel_id
+                );
             }
 
-            all_messages.extend(resp.messages);
+            all_messages.extend(resp.messages.unwrap_or_default());
             cursor = next_cursor(resp.response_metadata);
 
             if cursor.is_none() {
@@ -249,10 +344,16 @@ impl SlackClient {
                 .context("Failed to parse conversations.replies response")?;
 
             if !resp.ok {
-                anyhow::bail!("conversations.replies returned ok=false");
+                let error_msg = resp.error.as_deref().unwrap_or("unknown error");
+                anyhow::bail!(
+                    "conversations.replies returned ok=false: {} (channel: {}, thread: {})",
+                    error_msg,
+                    channel_id,
+                    thread_ts
+                );
             }
 
-            all_replies.extend(resp.messages);
+            all_replies.extend(resp.messages.unwrap_or_default());
             cursor = next_cursor(resp.response_metadata);
 
             if cursor.is_none() {

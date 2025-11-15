@@ -1,14 +1,14 @@
 [package]
-name = "slack_linear_tools"
+name = "vibeos"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "slack_linear_tools"
+name = "vibeos"
 path = "src/lib.rs"
 
 [[bin]]
-name = "slack-linear"
+name = "vibeos"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use slack_linear_tools::{config, linear, llm, setup, slack};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use vibeos::{config, linear, llm, setup, slack};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,6 +27,11 @@ async fn handle_slack(command: SlackCommands) -> Result<()> {
             let token = config::slack_token()?;
             let client = slack::SlackClient::new(token);
             client.mirror_all(&output_path).await
+        }
+        SlackCommands::JoinChannels => {
+            let token = config::slack_token()?;
+            let client = slack::SlackClient::new(token);
+            client.join_all_public_channels().await
         }
     }
 }
@@ -198,7 +203,7 @@ fn compose_linear_description(
 }
 
 #[derive(Parser)]
-#[command(name = "slack-linear", version, about)]
+#[command(name = "vibeos", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -225,10 +230,12 @@ enum Commands {
 enum SlackCommands {
     /// Mirror all accessible Slack conversations to local disk
     Mirror {
-        /// Optional output directory. Defaults to SLACK_MIRROR_DIR or ./slack_mirror
+        /// Optional output directory. Defaults to VIBEOS_SLACK_MIRROR_DIR or ./slack_mirror
         #[arg(long)]
         output_dir: Option<PathBuf>,
     },
+    /// Join all public channels (bot will auto-join during mirror anyway)
+    JoinChannels,
 }
 
 #[derive(Subcommand)]
@@ -260,7 +267,7 @@ enum LlmCommands {
         /// Root message ts of the thread
         #[arg(long)]
         thread_ts: String,
-        /// Optional data dir; defaults to SLACK_MIRROR_DIR
+        /// Optional data dir; defaults to VIBEOS_SLACK_MIRROR_DIR
         #[arg(long)]
         data_dir: Option<PathBuf>,
         /// If set, pretty-print the JSON result
