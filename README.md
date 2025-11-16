@@ -75,6 +75,24 @@ cargo run -- linear create-issue \
 Prints the issue identifier and URL on success.
 After installation, invoke `vibeos linear create-issue ...` directly.
 
+### Mirror Linear
+
+```bash
+cargo run -- linear sync
+# or specify a destination
+cargo run -- linear sync --output-dir /path/to/linear_mirror
+```
+
+Creates/updates a Linear mirror under `VIBEOS_LINEAR_MIRROR_DIR` (default `./linear_mirror`):
+- `issues.jsonl` – canonical latest snapshot per issue (upserted via `updatedAt` filters, so reruns only fetch and rewrite changed issues)
+- `events.N.jsonl` – append-only history shards capped at ~1 MB each (`events.0.jsonl` is the active log, older shards shift to `events.1.jsonl`, `events.2.jsonl`, …)
+- `meta.json` – tracks `last_full_sync_at` to make subsequent syncs incremental and stores the workspace name
+
+The sync is idempotent:
+- Re-running adds only new issue updates and new events; unchanged issues/events leave their files untouched
+- Historical events are never refetched—new entries append to the active shard, and automatic log rotation preserves older shards for analysis (`linear events`, `stale`, etc. read all shards)
+- Because `issues.jsonl` is canonical, edits, state changes, and deletions are reflected immediately on the next run even though older event shards remain immutable
+
 ---
 
 ## Development Workflow

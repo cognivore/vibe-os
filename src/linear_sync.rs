@@ -1,6 +1,8 @@
-use std::fs::{self, File};
-use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -9,13 +11,17 @@ use serde::{Deserialize, Serialize};
 use crate::linear::LinearClient;
 
 const ISSUES_QUERY: &str = r#"
-query SyncIssues($after: String) {
+query SyncIssues($after: String, $updatedSince: DateTime) {
   viewer {
     organization {
       name
     }
   }
-  issues(first: 50, after: $after) {
+  issues(
+    first: 50,
+    after: $after,
+    filter: { updatedAt: { gt: $updatedSince } }
+  ) {
     nodes {
       id
       identifier
@@ -77,6 +83,10 @@ query SyncIssues($after: String) {
   }
 }
 "#;
+
+const EVENT_ROTATE_TRIGGER_BYTES: u64 = 1_000_000;
+const EVENT_LOG_PREFIX: &str = "events";
+const EVENT_LOG_EXTENSION: &str = "jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinearIssueSnapshot {
@@ -143,17 +153,14 @@ impl<'a> LinearSync<'a> {
         })?;
 
         let issues_path = output_dir.join("issues.jsonl");
-        let events_path = output_dir.join("events.jsonl");
         let meta_path = output_dir.join("meta.json");
 
-        let issues_file = File::create(&issues_path)
-            .with_context(|| format!("failed to open {} for writing", issues_path.display()))?;
-        let events_file = File::create(&events_path)
-            .with_context(|| format!("failed to open {} for writing", events_path.display()))?;
+        let mut issues_by_id = read_existing_issues(&issues_path)?;
 
-        let mut issues_writer = BufWriter::new(issues_file);
-        let mut events_writer = BufWriter::new(events_file);
+        let last_sync_at = read_last_sync(meta_path.as_path())?;
 
+        let mut seen_event_ids = read_existing_event_ids(output_dir)?;
+        let mut pending_events = Vec::new();
         let mut after: Option<String> = None;
         let mut workspace_name: Option<String> = None;
 
@@ -163,7 +170,8 @@ impl<'a> LinearSync<'a> {
                 .graphql_query(
                     ISSUES_QUERY,
                     serde_json::json!({
-                        "after": after
+                        "after": after,
+                        "updatedSince": last_sync_at
                     }),
                 )
                 .await
@@ -177,12 +185,9 @@ impl<'a> LinearSync<'a> {
 
             for node in data.issues.nodes.into_iter() {
                 let snapshot = LinearIssueSnapshot::from_node(&node);
-                write_json_line(&mut issues_writer, &snapshot)?;
+                issues_by_id.insert(snapshot.id.clone(), snapshot.clone());
 
-                let mut issue_events = LinearIssueEvent::from_issue_node(&node);
-                for event in issue_events.drain(..) {
-                    write_json_line(&mut events_writer, &event)?;
-                }
+                pending_events.extend(collect_new_events(&node, &mut seen_event_ids));
             }
 
             if !data.issues.page_info.has_next_page {
@@ -192,35 +197,18 @@ impl<'a> LinearSync<'a> {
             after = data.issues.page_info.end_cursor;
         }
 
-        issues_writer
-            .flush()
-            .context("failed to flush issues mirror")?;
-        events_writer
-            .flush()
-            .context("failed to flush events mirror")?;
+        write_issues(&issues_path, &issues_by_id)?;
+        append_events_with_rotation(output_dir, &pending_events)?;
 
         let meta = LinearMirrorMeta {
             last_full_sync_at: Some(Utc::now()),
             workspace_name,
         };
 
-        let meta_file = File::create(&meta_path)
-            .with_context(|| format!("failed to open {} for writing", meta_path.display()))?;
-        serde_json::to_writer_pretty(meta_file, &meta)
-            .with_context(|| format!("failed to write meta at {}", meta_path.display()))?;
+        write_meta(&meta_path, &meta)?;
 
         Ok(())
     }
-}
-
-fn write_json_line<W, T>(writer: &mut W, value: &T) -> Result<()>
-where
-    W: Write,
-    T: Serialize,
-{
-    serde_json::to_writer(&mut *writer, value)?;
-    writer.write_all(b"\n")?;
-    Ok(())
 }
 
 impl LinearIssueSnapshot {
@@ -350,6 +338,294 @@ fn is_done_state(state_type: &Option<String>) -> bool {
         state_type.as_deref(),
         Some("completed") | Some("canceled") | Some("done")
     )
+}
+
+fn read_last_sync(path: &Path) -> Result<Option<DateTime<Utc>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let meta_file = File::open(path)
+        .with_context(|| format!("failed to open {} for reading", path.display()))?;
+    let meta: LinearMirrorMeta =
+        serde_json::from_reader(meta_file).with_context(|| "failed to parse meta.json")?;
+    Ok(meta.last_full_sync_at)
+}
+
+fn write_meta(path: &Path, meta: &LinearMirrorMeta) -> Result<()> {
+    let file = File::create(path)
+        .with_context(|| format!("failed to open {} for writing", path.display()))?;
+    serde_json::to_writer_pretty(file, meta)
+        .with_context(|| format!("failed to write meta at {}", path.display()))
+}
+
+fn read_existing_issues(path: &Path) -> Result<HashMap<String, LinearIssueSnapshot>> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let file = File::open(path)
+        .with_context(|| format!("failed to open {} for reading", path.display()))?;
+    let reader = BufReader::new(file);
+
+    let mut issues = HashMap::new();
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| {
+            format!(
+                "failed to read issue line {} from {}",
+                idx + 1,
+                path.display()
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let issue: LinearIssueSnapshot = serde_json::from_str(&line).with_context(|| {
+            format!(
+                "failed to parse issue line {} from {}",
+                idx + 1,
+                path.display()
+            )
+        })?;
+        issues.insert(issue.id.clone(), issue);
+    }
+
+    Ok(issues)
+}
+
+fn write_issues(path: &Path, issues: &HashMap<String, LinearIssueSnapshot>) -> Result<()> {
+    let file = File::create(path)
+        .with_context(|| format!("failed to open {} for writing", path.display()))?;
+    let mut writer = BufWriter::new(file);
+
+    let mut entries: Vec<_> = issues.values().collect();
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
+
+    for issue in entries {
+        serde_json::to_writer(&mut writer, issue).with_context(|| {
+            format!(
+                "failed to serialize issue {} to {}",
+                issue.id,
+                path.display()
+            )
+        })?;
+        writer
+            .write_all(b"\n")
+            .with_context(|| format!("failed to write newline while writing {}", path.display()))?;
+    }
+
+    writer
+        .flush()
+        .with_context(|| format!("failed to flush {}", path.display()))
+}
+
+fn read_existing_event_ids(dir: &Path) -> Result<HashSet<String>> {
+    migrate_legacy_event_log(dir)?;
+
+    let mut ids = HashSet::new();
+    if !dir.exists() {
+        return Ok(ids);
+    }
+
+    for entry in fs::read_dir(dir).with_context(|| "failed to read mirror directory")? {
+        let entry = entry?;
+        let path = entry.path();
+        if is_event_log_file(&path) {
+            read_event_ids_from_file(&path, &mut ids)?;
+        }
+    }
+
+    Ok(ids)
+}
+
+fn read_event_ids_from_file(path: &Path, ids: &mut HashSet<String>) -> Result<()> {
+    let file = File::open(path)
+        .with_context(|| format!("failed to open {} for reading", path.display()))?;
+    let reader = BufReader::new(file);
+
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| {
+            format!(
+                "failed to read event line {} from {}",
+                idx + 1,
+                path.display()
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: LinearIssueEvent = serde_json::from_str(&line).with_context(|| {
+            format!(
+                "failed to parse event line {} from {}",
+                idx + 1,
+                path.display()
+            )
+        })?;
+        ids.insert(event.id);
+    }
+
+    Ok(())
+}
+
+fn collect_new_events<'a>(
+    node: &'a IssueNode,
+    seen: &mut HashSet<String>,
+) -> Vec<LinearIssueEvent> {
+    LinearIssueEvent::from_issue_node(node)
+        .into_iter()
+        .filter(|event| seen.insert(event.id.clone()))
+        .collect()
+}
+
+fn append_events_with_rotation(dir: &Path, events: &[LinearIssueEvent]) -> Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    migrate_legacy_event_log(dir)?;
+    ensure_active_event_log(dir)?;
+    rotate_if_needed(dir)?;
+
+    let active_path = active_event_log_path(dir);
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&active_path)
+        .with_context(|| format!("failed to open {} for appending", active_path.display()))?;
+    let mut writer = BufWriter::new(file);
+
+    for event in events {
+        serde_json::to_writer(&mut writer, event).with_context(|| {
+            format!(
+                "failed to serialize event {} while appending to {}",
+                event.id,
+                active_path.display()
+            )
+        })?;
+        writer.write_all(b"\n").with_context(|| {
+            format!(
+                "failed to write newline while appending to {}",
+                active_path.display()
+            )
+        })?;
+    }
+
+    writer.flush().with_context(|| {
+        format!(
+            "failed to flush appended events to {}",
+            active_path.display()
+        )
+    })?;
+
+    rotate_if_needed(dir)?;
+
+    Ok(())
+}
+
+fn rotate_if_needed(dir: &Path) -> Result<()> {
+    let active_path = active_event_log_path(dir);
+    if !active_path.exists() {
+        ensure_active_event_log(dir)?;
+        return Ok(());
+    }
+
+    let size = fs::metadata(&active_path)
+        .with_context(|| format!("failed to read metadata for {}", active_path.display()))?
+        .len();
+
+    if size < EVENT_ROTATE_TRIGGER_BYTES {
+        return Ok(());
+    }
+
+    rotate_event_logs(dir)?;
+    Ok(())
+}
+
+fn rotate_event_logs(dir: &Path) -> Result<()> {
+    ensure_active_event_log(dir)?;
+
+    let mut logs: Vec<(u32, PathBuf)> = fs::read_dir(dir)
+        .with_context(|| "failed to read mirror directory for rotation")?
+        .filter_map(|entry| {
+            entry.ok().and_then(|e| {
+                let path = e.path();
+                let name = path.file_name()?.to_string_lossy().into_owned();
+                event_log_number(&name).map(|num| (num, path))
+            })
+        })
+        .collect();
+
+    logs.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (number, path) in logs {
+        let new_path = dir.join(event_log_filename(number + 1));
+        fs::rename(&path, &new_path).with_context(|| {
+            format!(
+                "failed to rotate {} to {}",
+                path.display(),
+                new_path.display()
+            )
+        })?;
+    }
+
+    ensure_active_event_log(dir)?;
+    Ok(())
+}
+
+fn migrate_legacy_event_log(dir: &Path) -> Result<()> {
+    let legacy = dir.join(format!("{EVENT_LOG_PREFIX}.{EVENT_LOG_EXTENSION}"));
+    let active = active_event_log_path(dir);
+
+    if legacy.exists() && !active.exists() {
+        fs::rename(&legacy, &active).with_context(|| {
+            format!(
+                "failed to migrate legacy event log {} to {}",
+                legacy.display(),
+                active.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn ensure_active_event_log(dir: &Path) -> Result<()> {
+    let path = active_event_log_path(dir);
+    if path.exists() {
+        return Ok(());
+    }
+    File::create(&path).with_context(|| format!("failed to create {}", path.display()))?;
+    Ok(())
+}
+
+fn active_event_log_path(dir: &Path) -> PathBuf {
+    dir.join(event_log_filename(0))
+}
+
+fn is_event_log_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .and_then(event_log_number)
+        .is_some()
+}
+
+fn event_log_number(name: &str) -> Option<u32> {
+    let legacy = format!("{EVENT_LOG_PREFIX}.{EVENT_LOG_EXTENSION}");
+    if name == legacy {
+        return Some(0);
+    }
+
+    let prefix = format!("{EVENT_LOG_PREFIX}.");
+    let suffix = format!(".{EVENT_LOG_EXTENSION}");
+    if name.starts_with(&prefix) && name.ends_with(&suffix) {
+        let number_part = &name[prefix.len()..name.len() - suffix.len()];
+        return number_part.parse().ok();
+    }
+    None
+}
+
+fn event_log_filename(number: u32) -> String {
+    format!("{EVENT_LOG_PREFIX}.{number}.{EVENT_LOG_EXTENSION}")
 }
 
 #[derive(Debug, Deserialize)]
