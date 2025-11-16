@@ -1,7 +1,8 @@
 export type ArrowDirection =
   | "analysis_request"
   | "synthesis_request"
-  | "elaboration_request";
+  | "elaboration_request"
+  | "implementation_request";
 
 export interface DomainDescriptor {
   id: string;

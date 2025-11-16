@@ -12,6 +12,8 @@ pub enum ArrowDirection {
     SynthesisRequest,
     /// Refinements, clarifications, etc.
     ElaborationRequest,
+    /// From task/issue domains → code domains (e.g., GitHub).
+    ImplementationRequest,
 }
 
 /// Implementation style.

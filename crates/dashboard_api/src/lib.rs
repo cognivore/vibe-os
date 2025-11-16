@@ -24,6 +24,7 @@ use core_persona::store::IdentityStore;
 use domain_adapters::{LinearAdapter, SlackAdapter};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 use uuid::Uuid;
@@ -97,6 +98,12 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         .route("/:id", get(get_identity))
         .route("/:id/personas", post(attach_persona));
 
+    // Configure CORS for development
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     let api_router = Router::new()
         .route("/domains", get(list_domains))
         .route("/events", get(list_events))
@@ -105,6 +112,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         .route("/arrows", get(list_arrows))
         .route("/meta", get(fetch_meta))
         .nest("/identities", identity_routes)
+        .layer(cors)
         .with_state(state.clone());
 
     let mut app = Router::new().nest("/api", api_router);

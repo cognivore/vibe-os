@@ -66,6 +66,7 @@ export default function ArrowsPage() {
     { label: "Analysis", value: "analysis_request" },
     { label: "Synthesis", value: "synthesis_request" },
     { label: "Elaboration", value: "elaboration_request" },
+    { label: "Implementation", value: "implementation_request" },
   ];
 
   const domainLookup = useMemo(
