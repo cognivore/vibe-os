@@ -75,6 +75,20 @@ query SyncIssues($after: String, $updatedSince: DateTimeOrDuration) {
           toPriority
         }
       }
+      comments(first: 100) {
+        nodes {
+          id
+          body
+          url
+          createdAt
+          updatedAt
+          user {
+            id
+            name
+            displayName
+          }
+        }
+      }
     }
     pageInfo {
       hasNextPage
@@ -176,6 +190,20 @@ pub struct LinearMirrorMeta {
     pub workspace_name: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinearCommentRecord {
+    pub id: String,
+    pub issue_id: String,
+    pub issue_identifier: Option<String>,
+    pub body: String,
+    pub url: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub user_id: Option<String>,
+    pub user_name: Option<String>,
+    pub user_display_name: Option<String>,
+}
+
 pub struct LinearSync<'a> {
     client: &'a LinearClient,
 }
@@ -194,9 +222,11 @@ impl<'a> LinearSync<'a> {
         })?;
 
         let issues_path = output_dir.join("issues.jsonl");
+        let comments_path = output_dir.join("comments.jsonl");
         let meta_path = output_dir.join("meta.json");
 
         let mut issues_by_id = read_existing_issues(&issues_path)?;
+        let mut comments_by_issue = read_existing_comments(&comments_path).unwrap_or_default();
 
         let last_sync_at = read_last_sync(meta_path.as_path())?;
 
@@ -229,6 +259,18 @@ impl<'a> LinearSync<'a> {
                 issues_by_id.insert(snapshot.id.clone(), snapshot.clone());
 
                 pending_events.extend(collect_new_events(&node, &mut seen_event_ids));
+                for comment in LinearCommentRecord::from_issue_node(&node) {
+                    let entry = comments_by_issue
+                        .entry(comment.issue_id.clone())
+                        .or_insert_with(Vec::new);
+                    if let Some(existing) =
+                        entry.iter_mut().find(|existing| existing.id == comment.id)
+                    {
+                        *existing = comment;
+                    } else {
+                        entry.push(comment);
+                    }
+                }
             }
 
             if !data.issues.page_info.has_next_page {
@@ -239,6 +281,7 @@ impl<'a> LinearSync<'a> {
         }
 
         write_issues(&issues_path, &issues_by_id)?;
+        write_comments(&comments_path, &comments_by_issue)?;
         append_events_with_rotation(output_dir, &pending_events)?;
 
         let meta = LinearMirrorMeta {
@@ -420,6 +463,31 @@ impl LinearIssueEvent {
     }
 }
 
+impl LinearCommentRecord {
+    fn from_issue_node(node: &IssueNode) -> Vec<Self> {
+        if let Some(comments_conn) = &node.comments {
+            comments_conn
+                .nodes
+                .iter()
+                .map(|comment| Self {
+                    id: comment.id.clone(),
+                    issue_id: node.id.clone(),
+                    issue_identifier: Some(node.identifier.clone()),
+                    body: comment.body.clone().unwrap_or_default(),
+                    url: comment.url.clone(),
+                    created_at: comment.created_at,
+                    updated_at: comment.updated_at,
+                    user_id: comment.user.as_ref().map(|u| u.id.clone()),
+                    user_name: comment.user.as_ref().map(|u| u.name.clone()),
+                    user_display_name: comment.user.as_ref().and_then(|u| u.display_name.clone()),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 fn is_done_state(state_type: &Option<String>) -> bool {
     matches!(
         state_type.as_deref(),
@@ -478,6 +546,66 @@ fn read_existing_issues(path: &Path) -> Result<HashMap<String, LinearIssueSnapsh
     }
 
     Ok(issues)
+}
+
+fn read_existing_comments(path: &Path) -> Result<HashMap<String, Vec<LinearCommentRecord>>> {
+    let mut comments = HashMap::new();
+    if !path.exists() {
+        return Ok(comments);
+    }
+
+    let file = File::open(path)
+        .with_context(|| format!("failed to open {} for reading", path.display()))?;
+    let reader = BufReader::new(file);
+
+    for (idx, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| {
+            format!(
+                "failed to read comment line {} from {}",
+                idx + 1,
+                path.display()
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let comment: LinearCommentRecord = serde_json::from_str(&line).with_context(|| {
+            format!(
+                "failed to parse comment line {} from {}",
+                idx + 1,
+                path.display()
+            )
+        })?;
+        comments
+            .entry(comment.issue_id.clone())
+            .or_insert_with(Vec::new)
+            .push(comment);
+    }
+
+    Ok(comments)
+}
+
+fn write_comments(path: &Path, comments: &HashMap<String, Vec<LinearCommentRecord>>) -> Result<()> {
+    let file = File::create(path)
+        .with_context(|| format!("failed to open {} for writing", path.display()))?;
+    let mut writer = BufWriter::new(file);
+    for list in comments.values() {
+        for comment in list {
+            serde_json::to_writer(&mut writer, comment).with_context(|| {
+                format!(
+                    "failed to serialize comment {} to {}",
+                    comment.id,
+                    path.display()
+                )
+            })?;
+            writer
+                .write_all(b"\n")
+                .with_context(|| format!("failed to write newline to {}", path.display()))?;
+        }
+    }
+    writer
+        .flush()
+        .with_context(|| format!("failed to flush {}", path.display()))
 }
 
 fn write_issues(path: &Path, issues: &HashMap<String, LinearIssueSnapshot>) -> Result<()> {
@@ -847,6 +975,7 @@ struct IssueNode {
     assignee: Option<UserRef>,
     labels: Option<LabelConnection>,
     history: Option<HistoryConnection>,
+    comments: Option<CommentConnection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -865,9 +994,12 @@ struct StateRefExtended {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UserRef {
     id: String,
     name: String,
+    #[serde(default)]
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -879,6 +1011,23 @@ struct LabelConnection {
 struct LabelRef {
     id: String,
     name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentConnection {
+    nodes: Vec<CommentNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentNode {
+    id: String,
+    body: Option<String>,
+    url: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    user: Option<UserRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

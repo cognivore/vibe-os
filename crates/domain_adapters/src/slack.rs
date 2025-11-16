@@ -107,7 +107,8 @@ impl EventAdapter for SlackAdapter {
             envelopes.extend(read_dir_events(&conversations_dir, window)?);
         }
 
-        // Threads get mapped as separate events referencing the same channel/thread id.
+        // Threads: load ALL messages for threads that have ANY message in the window.
+        // This ensures we show complete thread history even if some messages are old.
         let threads_dir = self.root.join(THREADS_DIR);
         if threads_dir.exists() {
             envelopes.extend(read_thread_events(&threads_dir, window)?);
@@ -182,6 +183,32 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
             if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                 continue;
             }
+
+            // First pass: check if ANY message in this thread is in the window
+            let file_check = File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
+            let reader_check = BufReader::new(file_check);
+            let mut has_message_in_window = false;
+            for line in reader_check.lines() {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(record) = serde_json::from_str::<SlackMessageRecord>(&line) {
+                    if let Some(at) = slack_ts_to_datetime(&record.ts) {
+                        if window.contains(&at) {
+                            has_message_in_window = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // If no message in window, skip this entire thread
+            if !has_message_in_window {
+                continue;
+            }
+
+            // Second pass: load ALL messages from this thread (not just those in window)
             let file =
                 File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
             let reader = BufReader::new(file);
@@ -200,9 +227,8 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
                     if let Some(thread_ts) = thread_ts {
                         envelope.entity_id = Some(format!("{channel_id}:{thread_ts}"));
                     }
-                    if window.contains(&envelope.at) {
-                        envelopes.push(envelope);
-                    }
+                    // Load ALL messages, not just those in window
+                    envelopes.push(envelope);
                 }
             }
         }
