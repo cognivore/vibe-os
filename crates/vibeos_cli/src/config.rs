@@ -21,6 +21,13 @@ const LEGACY_LLM_MODEL_VAR: &str = "LLM_MODEL";
 const LLM_TEMPERATURE_VAR: &str = "VIBEOS_LLM_TEMPERATURE";
 const LEGACY_LLM_TEMPERATURE_VAR: &str = "LLM_TEMPERATURE";
 const DEFAULT_LLM_TEMPERATURE: f32 = 0.2;
+const ARROW_STORE_DIR_VAR: &str = "VIBEOS_ARROW_STORE_DIR";
+const DEFAULT_ARROW_STORE_DIR: &str = "./arrows";
+const DASHBOARD_BIND_VAR: &str = "VIBEOS_DASHBOARD_BIND";
+const DEFAULT_DASHBOARD_BIND: &str = "127.0.0.1:3000";
+const DASHBOARD_STATIC_DIR_VAR: &str = "VIBEOS_DASHBOARD_STATIC_DIR";
+const PERSONA_ROOT_DIR_VAR: &str = "PERSONA_ROOT_DIR";
+const DEFAULT_PERSONA_ROOT: &str = "./personas";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -32,6 +39,10 @@ pub struct Config {
     pub llm_api_key: Option<String>,
     pub llm_model: Option<String>,
     pub llm_temperature: f32,
+    pub arrow_store_dir: PathBuf,
+    pub dashboard_bind: String,
+    pub dashboard_static_dir: Option<PathBuf>,
+    pub persona_root: PathBuf,
 }
 
 impl Config {
@@ -78,6 +89,20 @@ pub fn load_config() -> Result<Config> {
         None => DEFAULT_LLM_TEMPERATURE,
     };
 
+    let arrow_store_dir = read_optional_env(ARROW_STORE_DIR_VAR, ARROW_STORE_DIR_VAR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_ARROW_STORE_DIR));
+
+    let dashboard_bind = read_optional_env(DASHBOARD_BIND_VAR, DASHBOARD_BIND_VAR)
+        .unwrap_or_else(|| DEFAULT_DASHBOARD_BIND.to_string());
+
+    let dashboard_static_dir =
+        read_optional_env(DASHBOARD_STATIC_DIR_VAR, DASHBOARD_STATIC_DIR_VAR).map(PathBuf::from);
+
+    let persona_root = read_optional_env(PERSONA_ROOT_DIR_VAR, PERSONA_ROOT_DIR_VAR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_PERSONA_ROOT));
+
     Ok(Config {
         slack_token,
         linear_api_key,
@@ -87,6 +112,10 @@ pub fn load_config() -> Result<Config> {
         llm_api_key,
         llm_model,
         llm_temperature,
+        arrow_store_dir,
+        dashboard_bind,
+        dashboard_static_dir,
+        persona_root,
     })
 }
 

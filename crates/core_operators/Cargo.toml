@@ -1,0 +1,11 @@
+[package]
+name = "core_operators"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+core_model = { path = "../core_model" }
+uuid = { workspace = true }
+

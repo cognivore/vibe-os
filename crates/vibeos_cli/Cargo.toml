@@ -1,0 +1,28 @@
+[package]
+name = "vibeos_cli"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "vibeos"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+once_cell = { workspace = true }
+clap = { workspace = true }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+open = "5"
+core_model = { path = "../core_model" }
+core_operators = { path = "../core_operators" }
+domain_adapters = { path = "../domain_adapters" }
+arrow_store = { path = "../arrow_store" }
+dashboard_api = { path = "../dashboard_api" }
+

@@ -138,14 +138,21 @@ impl LinearClient {
             .context("Failed to send GraphQL request")?;
 
         let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
+
         if !status.is_success() {
-            anyhow::bail!("Linear API returned status: {}", status);
+            anyhow::bail!(
+                "Linear API returned status: {}. Body: {}",
+                status,
+                body_text
+            );
         }
 
-        let resp: GraphQLResponse<T> = response
-            .json()
-            .await
-            .context("Failed to parse GraphQL response")?;
+        let resp: GraphQLResponse<T> =
+            serde_json::from_str(&body_text).context("Failed to parse GraphQL response")?;
 
         if let Some(errors) = resp.errors {
             let error_messages: Vec<String> = errors.into_iter().map(|e| e.message).collect();

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::linear::LinearClient;
 
 const ISSUES_QUERY: &str = r#"
-query SyncIssues($after: String, $updatedSince: DateTime) {
+query SyncIssues($after: String, $updatedSince: DateTimeOrDuration) {
   viewer {
     organization {
       name

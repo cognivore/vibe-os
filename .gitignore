@@ -8,3 +8,9 @@ Cargo.lock
 **/*.rs.bk
 slack_mirror/
 linear_mirror/
+
+# Node.js
+node_modules/
+
+# Vite build cache
+dashboard/dist/

@@ -1,4 +1,5 @@
 pub mod config;
+pub mod dashboard;
 pub mod haskllm;
 pub mod linear;
 pub mod linear_analysis;

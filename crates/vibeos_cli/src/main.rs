@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use vibeos::{config, linear, linear_analysis, linear_sync, llm, setup, slack};
+use vibeos_cli::{config, dashboard, linear, linear_analysis, linear_sync, llm, setup, slack};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,6 +16,10 @@ async fn main() -> Result<()> {
         Commands::Slack { slack_cmd } => handle_slack(slack_cmd).await,
         Commands::Linear { linear_cmd } => handle_linear(linear_cmd).await,
         Commands::Llm { llm_cmd } => handle_llm(llm_cmd).await,
+        Commands::Serve => {
+            let cfg = config::load_config()?;
+            dashboard::serve(&cfg).await
+        }
     }
 }
 
@@ -588,6 +592,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Setup,
+    /// Run the dashboard + API server
+    Serve,
     Slack {
         #[command(subcommand)]
         slack_cmd: SlackCommands,

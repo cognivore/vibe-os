@@ -93,6 +93,33 @@ The sync is idempotent:
 - Historical events are never refetched—new entries append to the active shard, and automatic log rotation preserves older shards for analysis (`linear events`, `stale`, etc. read all shards)
 - Because `issues.jsonl` is canonical, edits, state changes, and deletions are reflected immediately on the next run even though older event shards remain immutable
 
+### Serve the dashboard API
+
+```bash
+cargo run -- serve
+# or use the flake app
+nix run .#serve
+```
+
+This boots the Axum server that exposes `/api/*` plus the static React dashboard bundle (when built). It uses the mirror directories and arrow store paths from the config file/environment:
+
+- `VIBEOS_SLACK_MIRROR_DIR` / `VIBEOS_LINEAR_MIRROR_DIR`
+- `VIBEOS_ARROW_STORE_DIR` (default `./arrows`)
+- `VIBEOS_DASHBOARD_BIND` (default `127.0.0.1:3000`)
+- `VIBEOS_DASHBOARD_STATIC_DIR` (optional pre-built frontend directory)
+
+### Frontend dashboard (pnpm + Vite)
+
+The React dashboard lives under `dashboard/` and talks to the Rust API.
+
+```bash
+cd dashboard
+pnpm install
+pnpm dev
+```
+
+By default it targets `http://localhost:3000/api`. Override via `VITE_API_BASE`.
+
 ---
 
 ## Development Workflow
@@ -127,8 +154,20 @@ The sync is idempotent:
 | `VIBEOS_LLM_API_KEY` (legacy `LLM_API_KEY`) | Optional bearer token for LLM endpoint | _(none)_                                    |
 | `VIBEOS_LLM_MODEL` (legacy `LLM_MODEL`) | Model identifier to call                | *required*                                  |
 | `VIBEOS_LLM_TEMPERATURE` (legacy `LLM_TEMPERATURE`) | Sampling temperature                 | `0.2`                                       |
+| `PERSONA_ROOT_DIR`      | Directory for identity/persona store JSON                     | `./personas`                                |
 
 These are loaded via `dotenvy`; the CLI will error with guidance if any are missing.
+
+---
+
+## Identities & Personas
+
+- **Identities** represent real humans and are keyed by canonical email. Each identity stores preferred name, avatar, and notes.
+- **Personas** are domain-specific aliases (Slack handles, Linear users, Calendar attendees) that belong to an identity. A persona is uniquely identified by `(domain, local_id)`.
+- Event envelopes and arrows now include both persona and identity identifiers so the HTTP API and dashboard can render “Ada (Slack:@ada)” consistently and operators/LLMs can reason about real people rather than per-app user IDs.
+- The dashboard exposes `/api/identities` endpoints (CRUD, persona linking, merges) and an Identities view where you can search by email, attach new domain aliases, and resolve duplicates.
+
+This separation lets email act as the global bridge while still capturing domain-specific handles for UI context.
 
 ---
 

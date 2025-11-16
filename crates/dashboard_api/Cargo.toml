@@ -1,0 +1,22 @@
+[package]
+name = "dashboard_api"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+arrow_store = { path = "../arrow_store" }
+axum = { workspace = true }
+chrono = { workspace = true }
+core_model = { path = "../core_model" }
+core_operators = { path = "../core_operators" }
+core_persona = { path = "../core_persona" }
+domain_adapters = { path = "../domain_adapters" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+

@@ -32,6 +32,24 @@
             beta
           ]);
       in
+      let
+        serveBackend = pkgs.writeShellApplication {
+          name = "vibeos-serve";
+          text = ''
+            cd ${self}
+            cargo run -p vibeos_cli -- serve "$@"
+          '';
+        };
+
+        dashboardDev = pkgs.writeShellApplication {
+          name = "vibeos-dashboard-dev";
+          text = ''
+            cd ${self}/dashboard
+            pnpm install
+            pnpm dev "$@"
+          '';
+        };
+      in
       {
         devShells.default = pkgs.mkShell {
           buildInputs =
@@ -45,7 +63,7 @@
               rust-analyzer
 
               # TypeScript toolchain
-              nodejs
+              nodejs_20
               pnpm
               typescript
 
@@ -99,6 +117,17 @@
 
           # rust-analyzer needs the std source tree
           RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
+        };
+
+        apps = {
+          serve = {
+            type = "app";
+            program = "${serveBackend}/bin/vibeos-serve";
+          };
+          dashboard = {
+            type = "app";
+            program = "${dashboardDev}/bin/vibeos-dashboard-dev";
+          };
         };
       }
     );
