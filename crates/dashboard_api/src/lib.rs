@@ -469,17 +469,12 @@ fn select_domains(csv: Option<&str>, state: &AppState) -> Result<Vec<Domain>> {
         if raw.trim().is_empty() {
             return Ok(state.adapters.keys().cloned().collect());
         }
-        return raw
+        let domains: Vec<Domain> = raw
             .split(',')
-            .map(|token| {
-                let domain = parse_domain_id(token.trim());
-                if state.adapters.contains_key(&domain) {
-                    Ok(domain)
-                } else {
-                    Err(anyhow!("domain `{}` is not registered", token))
-                }
-            })
+            .map(|token| parse_domain_id(token.trim()))
+            .filter(|domain| state.adapters.contains_key(domain))
             .collect();
+        return Ok(domains);
     }
     Ok(state.adapters.keys().cloned().collect())
 }
