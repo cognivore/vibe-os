@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   attachPersona,
   createIdentity,
@@ -278,6 +279,12 @@ export default function IdentitiesPage() {
                   </Badge>
                 ))
               )}
+              <Link
+                to={`/identities/${identity.id}`}
+                className="text-xs underline text-primary"
+              >
+                View profile
+              </Link>
             </CardContent>
           </Card>
         ))}

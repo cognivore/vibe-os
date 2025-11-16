@@ -145,6 +145,7 @@ struct EventsQuery {
     from: String,
     to: String,
     limit: Option<usize>,
+    identity_id: Option<String>,
 }
 
 async fn list_events(
@@ -153,6 +154,11 @@ async fn list_events(
 ) -> Result<Json<Vec<EventEnvelope>>, AppError> {
     let window = build_window(&query.from, &query.to)?;
     let domains = select_domains(query.domains.as_deref(), &state)?;
+    let identity_filter = query
+        .identity_id
+        .as_deref()
+        .map(parse_identity_id)
+        .transpose()?;
     let mut events = Vec::new();
     for domain in domains {
         if let Some(adapter) = state.adapters.get(&domain) {
@@ -165,11 +171,14 @@ async fn list_events(
             events.append(&mut loaded);
         }
     }
+    resolve_event_entities(&mut events, state.identity_store.clone()).await;
+    if let Some(identity_id) = identity_filter {
+        events.retain(|event| event.actor_identity_id == Some(identity_id));
+    }
     events.sort_by(|a, b| b.at.cmp(&a.at));
     if let Some(limit) = query.limit {
         events.truncate(limit);
     }
-    resolve_event_entities(&mut events, state.identity_store.clone()).await;
     Ok(Json(events))
 }
 

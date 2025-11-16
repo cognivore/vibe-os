@@ -1,25 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { getArrows, getDomains, getEvents, listIdentities } from "../api/client";
+import { Link, useNavigate } from "react-router-dom";
+import {
+  attachPersona,
+  createIdentity,
+  getArrows,
+  getDomains,
+  getEvents,
+  listIdentities,
+  lookupIdentity,
+} from "../api/client";
 import type {
   Arrow,
   DomainDescriptor,
   EventEnvelope,
   Identity,
   Persona,
+  PersonaKey,
 } from "../types/core";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { format } from "date-fns";
-
-interface TimelineEntry {
-  type: "event" | "arrow";
-  at: string;
-  event?: EventEnvelope;
-  arrow?: Arrow;
-}
+import {
+  TimelineEntryList,
+  type TimelineEntry,
+  type PersonaClickTarget,
+} from "../components/timeline/TimelineEntryList";
 
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ss";
 
@@ -33,6 +39,7 @@ function defaultWindow() {
 }
 
 export default function TimelinePage() {
+  const navigate = useNavigate();
   const [{ from, to }, setWindow] = useState(defaultWindow);
   const [domains, setDomains] = useState<DomainDescriptor[]>([]);
   const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
@@ -41,6 +48,19 @@ export default function TimelinePage() {
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [personaPrompt, setPersonaPrompt] = useState<PersonaPromptState | null>(
+    null,
+  );
+  const [personaEmail, setPersonaEmail] = useState("");
+  const [personaName, setPersonaName] = useState("");
+  const [personaBusy, setPersonaBusy] = useState(false);
+  const [personaError, setPersonaError] = useState<string | null>(null);
+
+  const loadIdentities = () => {
+    listIdentities()
+      .then(setIdentities)
+      .catch((err) => setError((prev) => prev ?? err.message));
+  };
 
   useEffect(() => {
     getDomains()
@@ -51,9 +71,7 @@ export default function TimelinePage() {
         }
       })
       .catch((err) => setError(err.message));
-    listIdentities()
-      .then(setIdentities)
-      .catch((err) => setError((prev) => prev ?? err.message));
+    loadIdentities();
   }, []);
 
   useEffect(() => {
@@ -71,6 +89,52 @@ export default function TimelinePage() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [from, to, selectedDomains]);
+
+  const handlePersonaClick = (target: PersonaClickTarget) => {
+    if (target.identityId) {
+      navigate(`/identities/${target.identityId}`);
+      return;
+    }
+    if (target.persona) {
+      setPersonaPrompt({ persona: target.persona, label: target.label });
+      setPersonaEmail("");
+      setPersonaName("");
+      setPersonaError(null);
+    }
+  };
+
+  async function handlePersonaAttach() {
+    if (!personaPrompt || !personaEmail.trim()) {
+      setPersonaError("Email is required");
+      return;
+    }
+    setPersonaBusy(true);
+    setPersonaError(null);
+    try {
+      const email = personaEmail.trim();
+      const preferredName = personaName.trim();
+      let identity =
+        (await lookupIdentity({ email })) ??
+        (await createIdentity({
+          canonical_email: email,
+          preferred_name: preferredName || undefined,
+        }));
+      await attachPersona(identity.id, {
+        domain: personaPrompt.persona.domain,
+        local_id: personaPrompt.persona.local_id,
+        label: personaPrompt.label,
+        display_name: preferredName || undefined,
+      });
+      loadIdentities();
+      setPersonaPrompt(null);
+      setPersonaEmail("");
+      setPersonaName("");
+    } catch (err) {
+      setPersonaError((err as Error).message);
+    } finally {
+      setPersonaBusy(false);
+    }
+  }
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [
@@ -216,118 +280,76 @@ export default function TimelinePage() {
         {loading ? (
           <div className="p-6 text-sm text-muted-foreground">Loading...</div>
         ) : (
-          <ul className="divide-y divide-border">
-            {timeline.map((entry) => {
-              if (entry.type === "event" && entry.event) {
-                const event = entry.event;
-                return (
-                  <li key={`event-${event.id}`} className="p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="space-y-1">
-                        <Badge variant="secondary">{event.domain}</Badge>
-                        <p className="text-sm font-medium">{event.summary}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {event.kind}
-                        </p>
-                        {renderActorChip(event, identityLookup, personaLookup)}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(event.at).toLocaleString()}
-                      </p>
-                    </div>
-                  </li>
-                );
-              }
-              if (entry.arrow && entry.type === "arrow") {
-                const arrow = entry.arrow;
-                return (
-                  <li key={`arrow-${arrow.id}`} className="p-4 bg-muted/20">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="space-y-1">
-                        <Badge>{arrow.direction.replace("_", " ")}</Badge>
-                        <p className="text-sm font-semibold">{arrow.title}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {arrow.source.kind === "domain_object"
-                            ? `${domainLookup[arrow.source.domain] ?? arrow.source.domain} → ${
-                                domainLookup[arrow.target.domain] ??
-                                arrow.target.domain
-                              }`
-                            : `${arrow.source.domain} → ${arrow.target.domain}`}
-                        </p>
-                        {renderArrowAuthorChip(arrow, identityLookup, personaLookup)}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(arrow.created_at).toLocaleString()}
-                      </p>
-                    </div>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      {arrow.detail_markdown}
-                    </p>
-                  </li>
-                );
-              }
-              return null;
-            })}
-          </ul>
+          <TimelineEntryList
+            entries={timeline}
+            domainLookup={domainLookup}
+            identityLookup={identityLookup}
+            personaLookup={personaLookup}
+            onPersonaClick={handlePersonaClick}
+          />
         )}
       </ScrollArea>
+
+      {personaPrompt ? (
+        <Card className="border border-dashed border-primary">
+          <CardHeader>
+            <CardTitle className="text-base">
+              Link persona @{personaPrompt.persona.local_id} (
+              {personaPrompt.persona.domain})
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Attach an email to convert this persona into a full identity.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <label className="flex flex-col gap-1">
+              Canonical email
+              <input
+                className="rounded-md border border-input bg-background px-3 py-2"
+                placeholder="person@example.com"
+                value={personaEmail}
+                onChange={(e) => setPersonaEmail(e.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              Preferred name (optional)
+              <input
+                className="rounded-md border border-input bg-background px-3 py-2"
+                placeholder="Ada Lovelace"
+                value={personaName}
+                onChange={(e) => setPersonaName(e.target.value)}
+              />
+            </label>
+            {personaError ? (
+              <p className="text-xs text-destructive-foreground">
+                {personaError}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={handlePersonaAttach}
+                disabled={personaBusy}
+                className="text-sm"
+              >
+                {personaBusy ? "Linking..." : "Attach persona"}
+              </Button>
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={() => setPersonaPrompt(null)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }
 
-function renderActorChip(
-  event: EventEnvelope,
-  identities: Record<string, Identity>,
-  personas: Record<string, { persona: Persona; identityId: string }>,
-) {
-  if (event.actor_identity_id && identities[event.actor_identity_id]) {
-    const identity = identities[event.actor_identity_id];
-    const personaInfo =
-      event.actor_persona_id && personas[event.actor_persona_id];
-    return (
-      <Badge variant="outline">
-        {identity.preferred_name ?? identity.canonical_email}
-        {personaInfo
-          ? ` (${personaInfo.persona.key.domain}:${personaInfo.persona.key.local_id})`
-          : null}
-      </Badge>
-    );
-  }
-  if (event.actor_persona_key) {
-    return (
-      <Badge variant="outline">
-        @{event.actor_persona_key.local_id} ({event.actor_persona_key.domain})
-      </Badge>
-    );
-  }
-  return null;
-}
-
-function renderArrowAuthorChip(
-  arrow: Arrow,
-  identities: Record<string, Identity>,
-  personas: Record<string, { persona: Persona; identityId: string }>,
-) {
-  if (arrow.author_identity_id && identities[arrow.author_identity_id]) {
-    const identity = identities[arrow.author_identity_id];
-    const personaInfo =
-      arrow.author_persona_id && personas[arrow.author_persona_id];
-    return (
-      <Badge variant="outline">
-        {identity.preferred_name ?? identity.canonical_email}
-        {personaInfo
-          ? ` (${personaInfo.persona.key.domain}:${personaInfo.persona.key.local_id})`
-          : null}
-      </Badge>
-    );
-  }
-  if (arrow.author_persona_key) {
-    return (
-      <Badge variant="outline">
-        {arrow.author_persona_key.domain}:{arrow.author_persona_key.local_id}
-      </Badge>
-    );
-  }
-  return null;
+interface PersonaPromptState {
+  persona: PersonaKey;
+  label?: string;
 }
 

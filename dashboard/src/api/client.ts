@@ -39,6 +39,7 @@ export interface EventsQuery {
   from: string;
   to: string;
   limit?: number;
+  identityId?: string;
 }
 
 export async function getEvents(params: EventsQuery): Promise<EventEnvelope[]> {
@@ -50,6 +51,9 @@ export async function getEvents(params: EventsQuery): Promise<EventEnvelope[]> {
   url.searchParams.set("to", params.to);
   if (params.limit) {
     url.searchParams.set("limit", params.limit.toString());
+  }
+  if (params.identityId) {
+    url.searchParams.set("identity_id", params.identityId);
   }
   const response = await fetch(url);
   if (!response.ok) {
@@ -125,6 +129,10 @@ export async function getMeta(): Promise<MetaSnapshot> {
 
 export async function listIdentities(): Promise<Identity[]> {
   return request("/api/identities");
+}
+
+export async function getIdentity(id: string): Promise<Identity> {
+  return request(`/api/identities/${id}`);
 }
 
 export interface CreateIdentityInput {
