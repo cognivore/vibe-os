@@ -9,4 +9,5 @@ core_types = { path = "../core_types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
+chrono = { workspace = true }
 

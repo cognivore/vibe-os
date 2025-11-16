@@ -98,8 +98,11 @@ export default function IdentityProfilePage() {
 
   const missingDomains = useMemo(() => {
     if (!identity) return [];
+    const supported = new Set(["slack", "linear"]);
     const present = new Set(identity.personas.map((persona) => persona.key.domain));
-    return domains.filter((domain) => !present.has(domain.id));
+    return domains.filter(
+      (domain) => supported.has(domain.id) && !present.has(domain.id),
+    );
   }, [domains, identity]);
 
   const handlePersonaClick = (target: PersonaClickTarget) => {
@@ -162,11 +165,16 @@ export default function IdentityProfilePage() {
               </div>
               {missingDomains.length ? (
                 <div className="text-xs text-muted-foreground">
-                  Missing personas:{" "}
-                  {missingDomains.map((domain) => domain.human_name).join(", ")}.{" "}
-                  <Link to="/identities" className="underline">
-                    Add personas
-                  </Link>
+                  Missing personas:
+                  {missingDomains.map((domain) => (
+                    <Link
+                      key={`${identity.id}-${domain.id}`}
+                      to={`/identities?provider=${domain.id}&identity=${identity.id}`}
+                      className="ml-1 text-primary underline"
+                    >
+                      {domain.human_name}
+                    </Link>
+                  ))}
                 </div>
               ) : null}
             </>

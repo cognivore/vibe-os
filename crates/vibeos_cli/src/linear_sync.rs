@@ -84,9 +84,31 @@ query SyncIssues($after: String, $updatedSince: DateTimeOrDuration) {
 }
 "#;
 
+const USERS_QUERY: &str = r#"
+query SyncUsers($after: String) {
+  users(first: 100, after: $after) {
+    nodes {
+      id
+      name
+      displayName
+      email
+      active
+      avatarUrl
+      createdAt
+      updatedAt
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+"#;
+
 const EVENT_ROTATE_TRIGGER_BYTES: u64 = 1_000_000;
 const EVENT_LOG_PREFIX: &str = "events";
 const EVENT_LOG_EXTENSION: &str = "jsonl";
+const USERS_DIR: &str = "users";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinearIssueSnapshot {
@@ -127,6 +149,25 @@ pub struct LinearIssueEvent {
     pub from_priority: Option<i32>,
     pub to_priority: Option<i32>,
     pub extra: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinearUserSnapshot {
+    pub fetched_at: DateTime<Utc>,
+    pub user: LinearUserNode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearUserNode {
+    pub id: String,
+    pub name: Option<String>,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub active: bool,
+    pub avatar_url: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +247,52 @@ impl<'a> LinearSync<'a> {
         };
 
         write_meta(&meta_path, &meta)?;
+
+        self.sync_users(output_dir).await?;
+
+        Ok(())
+    }
+
+    async fn sync_users(&self, output_dir: &Path) -> Result<()> {
+        let users_dir = output_dir.join(USERS_DIR);
+        fs::create_dir_all(&users_dir).with_context(|| {
+            format!("unable to create Linear users dir {}", users_dir.display())
+        })?;
+
+        let mut after: Option<String> = None;
+        let mut processed = 0usize;
+        let mut updated = 0usize;
+
+        loop {
+            let data: UsersQueryData = self
+                .client
+                .graphql_query(
+                    USERS_QUERY,
+                    serde_json::json!({
+                        "after": after,
+                    }),
+                )
+                .await
+                .context("failed to fetch Linear users page")?;
+
+            for user in data.users.nodes.into_iter() {
+                processed += 1;
+                if store_user_snapshot(&users_dir, user.clone())? {
+                    updated += 1;
+                }
+            }
+
+            if !data.users.page_info.has_next_page {
+                break;
+            }
+
+            after = data.users.page_info.end_cursor;
+        }
+
+        println!(
+            "Linear user directory synced ({} processed, {} snapshots updated)",
+            processed, updated
+        );
 
         Ok(())
     }
@@ -417,6 +504,76 @@ fn write_issues(path: &Path, issues: &HashMap<String, LinearIssueSnapshot>) -> R
     writer
         .flush()
         .with_context(|| format!("failed to flush {}", path.display()))
+}
+
+fn store_user_snapshot(dir: &Path, user: LinearUserNode) -> Result<bool> {
+    let path = dir.join(format!("{}.jsonl", user.id));
+    let snapshot = LinearUserSnapshot {
+        fetched_at: Utc::now(),
+        user,
+    };
+    if linear_user_changed(&path, &snapshot.user)? {
+        append_snapshot(&path, &snapshot)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn linear_user_changed(path: &Path, new_user: &LinearUserNode) -> Result<bool> {
+    if let Some(last) = read_last_user_snapshot(path)? {
+        Ok(last.user != *new_user)
+    } else {
+        Ok(true)
+    }
+}
+
+fn read_last_user_snapshot(path: &Path) -> Result<Option<LinearUserSnapshot>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(path)
+        .with_context(|| format!("failed to open {} for reading", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut last = None;
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("failed to read line from {}", path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let snapshot: LinearUserSnapshot = serde_json::from_str(&line)
+            .with_context(|| format!("failed to parse snapshot from {}", path.display()))?;
+        last = Some(snapshot);
+    }
+    Ok(last)
+}
+
+fn append_snapshot<T: Serialize>(path: &Path, entry: &T) -> Result<()> {
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("failed to open {} for appending", path.display()))?;
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer(&mut writer, entry).with_context(|| {
+        format!(
+            "failed to serialize snapshot while appending to {}",
+            path.display()
+        )
+    })?;
+    writer.write_all(b"\n").with_context(|| {
+        format!(
+            "failed to write newline while appending to {}",
+            path.display()
+        )
+    })?;
+    writer.flush().with_context(|| {
+        format!(
+            "failed to flush snapshot while appending to {}",
+            path.display()
+        )
+    })
 }
 
 fn read_existing_event_ids(dir: &Path) -> Result<HashSet<String>> {
@@ -635,6 +792,11 @@ struct IssuesQueryData {
 }
 
 #[derive(Debug, Deserialize)]
+struct UsersQueryData {
+    users: UsersConnection,
+}
+
+#[derive(Debug, Deserialize)]
 struct Viewer {
     organization: Option<Organization>,
 }
@@ -648,6 +810,13 @@ struct Organization {
 #[serde(rename_all = "camelCase")]
 struct IssuesConnection {
     nodes: Vec<IssueNode>,
+    page_info: PageInfo,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsersConnection {
+    nodes: Vec<LinearUserNode>,
     page_info: PageInfo,
 }
 

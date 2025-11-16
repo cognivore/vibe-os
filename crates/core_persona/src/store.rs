@@ -204,4 +204,23 @@ impl IdentityStore {
         f(identity);
         Ok(())
     }
+
+    pub fn detach_persona(&mut self, identity_id: IdentityId, persona_id: PersonaId) -> Result<()> {
+        let identity = self
+            .identities
+            .get_mut(&identity_id)
+            .context("identity not found")?;
+
+        let persona_idx = identity
+            .personas
+            .iter()
+            .position(|p| p.id == persona_id)
+            .context("persona not found in identity")?;
+
+        let persona = identity.personas.remove(persona_idx);
+        self.persona_to_identity.remove(&persona_id);
+        self.persona_keys.remove(&persona.key);
+
+        Ok(())
+    }
 }

@@ -8,7 +8,7 @@ use arrow_store::ArrowStore;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, get_service, post};
+use axum::routing::{delete, get, get_service, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use core_model::adapters::EventAdapter;
@@ -19,9 +19,10 @@ use core_model::operator::{ArrowDirection, OperatorDescriptor};
 use core_model::time::TimeWindow;
 use core_operators::{OperatorContext, OperatorRegistry};
 use core_persona::identity::{Identity, IdentityId};
-use core_persona::persona::{Persona, PersonaKey};
+use core_persona::persona::{Persona, PersonaId, PersonaKey};
+use core_persona::provider::{LinearProviderPersona, SlackProviderPersona};
 use core_persona::store::IdentityStore;
-use domain_adapters::{LinearAdapter, SlackAdapter};
+use domain_adapters::{load_linear_personas, load_slack_personas, LinearAdapter, SlackAdapter};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
@@ -38,6 +39,8 @@ struct AppState {
     arrow_store: Arc<ArrowStore>,
     identity_store: Arc<Mutex<IdentityStore>>,
     meta: Arc<MetaSnapshot>,
+    slack_mirror_dir: Arc<PathBuf>,
+    linear_mirror_dir: Arc<PathBuf>,
 }
 
 #[derive(Clone, Serialize)]
@@ -47,6 +50,12 @@ struct MetaSnapshot {
     arrow_store_dir: String,
     identity_store_dir: String,
     static_dir: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderPersonasResponse {
+    slack: Vec<SlackProviderPersona>,
+    linear: Vec<LinearProviderPersona>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +98,8 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         arrow_store,
         identity_store,
         meta: Arc::new(meta),
+        slack_mirror_dir: Arc::new(settings.slack_mirror_dir.clone()),
+        linear_mirror_dir: Arc::new(settings.linear_mirror_dir.clone()),
     };
 
     let identity_routes = Router::new()
@@ -96,7 +107,8 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         .route("/lookup", get(lookup_identity))
         .route("/merge", post(merge_identities))
         .route("/:id", get(get_identity))
-        .route("/:id/personas", post(attach_persona));
+        .route("/:id/personas", post(attach_persona))
+        .route("/:id/personas/:persona_id", delete(detach_persona));
 
     // Configure CORS for development
     let cors = CorsLayer::new()
@@ -110,6 +122,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         .route("/operators", get(list_operators))
         .route("/operators/run", post(run_operator))
         .route("/arrows", get(list_arrows))
+        .route("/providers/personas", get(list_provider_personas))
         .route("/meta", get(fetch_meta))
         .nest("/identities", identity_routes)
         .layer(cors)
@@ -180,6 +193,14 @@ async fn list_events(
         events.truncate(limit);
     }
     Ok(Json(events))
+}
+
+async fn list_provider_personas(
+    State(state): State<AppState>,
+) -> Result<Json<ProviderPersonasResponse>, AppError> {
+    let slack = load_slack_personas(&state.slack_mirror_dir)?;
+    let linear = load_linear_personas(&state.linear_mirror_dir)?;
+    Ok(Json(ProviderPersonasResponse { slack, linear }))
 }
 
 async fn list_operators(State(state): State<AppState>) -> impl IntoResponse {
@@ -404,6 +425,22 @@ async fn attach_persona(
     Ok(Json(identity))
 }
 
+async fn detach_persona(
+    State(state): State<AppState>,
+    Path((identity_id_str, persona_id_str)): Path<(String, String)>,
+) -> Result<Json<Identity>, AppError> {
+    let identity_id = parse_identity_id(&identity_id_str)?;
+    let persona_id = parse_persona_id(&persona_id_str)?;
+    let mut store = state.identity_store.lock().await;
+    store.detach_persona(identity_id, persona_id)?;
+    store.save()?;
+    let identity = store
+        .find_identity(identity_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("identity not found"))?;
+    Ok(Json(identity))
+}
+
 async fn merge_identities(
     State(state): State<AppState>,
     Json(body): Json<MergeIdentitiesRequest>,
@@ -584,6 +621,11 @@ fn endpoint_has_domain(endpoint: &core_model::arrow::ArrowEndpoint, domain: &Dom
 fn parse_identity_id(raw: &str) -> Result<IdentityId> {
     let id = Uuid::parse_str(raw).with_context(|| format!("invalid identity id `{}`", raw))?;
     Ok(IdentityId(id))
+}
+
+fn parse_persona_id(raw: &str) -> Result<PersonaId> {
+    let id = Uuid::parse_str(raw).with_context(|| format!("invalid persona id `{}`", raw))?;
+    Ok(PersonaId(id))
 }
 
 struct AppError(anyhow::Error);

@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  attachPersona,
-  createIdentity,
   getArrows,
   getDomains,
   getEvents,
   listIdentities,
-  lookupIdentity,
 } from "../api/client";
 import type {
   Arrow,
@@ -48,13 +45,6 @@ export default function TimelinePage() {
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [personaPrompt, setPersonaPrompt] = useState<PersonaPromptState | null>(
-    null,
-  );
-  const [personaEmail, setPersonaEmail] = useState("");
-  const [personaName, setPersonaName] = useState("");
-  const [personaBusy, setPersonaBusy] = useState(false);
-  const [personaError, setPersonaError] = useState<string | null>(null);
 
   const loadIdentities = () => {
     listIdentities()
@@ -96,45 +86,18 @@ export default function TimelinePage() {
       return;
     }
     if (target.persona) {
-      setPersonaPrompt({ persona: target.persona, label: target.label });
-      setPersonaEmail("");
-      setPersonaName("");
-      setPersonaError(null);
+      // Navigate to Identities page with prepopulated persona data
+      const params = new URLSearchParams({
+        provider: target.persona.domain,
+        local_id: target.persona.local_id,
+      });
+      if (target.label) {
+        params.set("label", target.label);
+      }
+      navigate(`/identities?${params.toString()}`);
     }
   };
 
-  async function handlePersonaAttach() {
-    if (!personaPrompt || !personaEmail.trim()) {
-      setPersonaError("Email is required");
-      return;
-    }
-    setPersonaBusy(true);
-    setPersonaError(null);
-    try {
-      const email = personaEmail.trim();
-      const preferredName = personaName.trim();
-      let identity =
-        (await lookupIdentity({ email })) ??
-        (await createIdentity({
-          canonical_email: email,
-          preferred_name: preferredName || undefined,
-        }));
-      await attachPersona(identity.id, {
-        domain: personaPrompt.persona.domain,
-        local_id: personaPrompt.persona.local_id,
-        label: personaPrompt.label,
-        display_name: preferredName || undefined,
-      });
-      loadIdentities();
-      setPersonaPrompt(null);
-      setPersonaEmail("");
-      setPersonaName("");
-    } catch (err) {
-      setPersonaError((err as Error).message);
-    } finally {
-      setPersonaBusy(false);
-    }
-  }
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [
@@ -289,67 +252,7 @@ export default function TimelinePage() {
           />
         )}
       </ScrollArea>
-
-      {personaPrompt ? (
-        <Card className="border border-dashed border-primary">
-          <CardHeader>
-            <CardTitle className="text-base">
-              Link persona @{personaPrompt.persona.local_id} (
-              {personaPrompt.persona.domain})
-            </CardTitle>
-            <p className="text-xs text-muted-foreground">
-              Attach an email to convert this persona into a full identity.
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <label className="flex flex-col gap-1">
-              Canonical email
-              <input
-                className="rounded-md border border-input bg-background px-3 py-2"
-                placeholder="person@example.com"
-                value={personaEmail}
-                onChange={(e) => setPersonaEmail(e.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              Preferred name (optional)
-              <input
-                className="rounded-md border border-input bg-background px-3 py-2"
-                placeholder="Ada Lovelace"
-                value={personaName}
-                onChange={(e) => setPersonaName(e.target.value)}
-              />
-            </label>
-            {personaError ? (
-              <p className="text-xs text-destructive-foreground">
-                {personaError}
-              </p>
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={handlePersonaAttach}
-                disabled={personaBusy}
-                className="text-sm"
-              >
-                {personaBusy ? "Linking..." : "Attach persona"}
-              </Button>
-              <Button
-                variant="ghost"
-                type="button"
-                onClick={() => setPersonaPrompt(null)}
-              >
-                Cancel
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
     </div>
   );
-}
-
-interface PersonaPromptState {
-  persona: PersonaKey;
-  label?: string;
 }
 

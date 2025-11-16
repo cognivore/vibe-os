@@ -31,6 +31,37 @@ export interface Identity {
   personas: Persona[];
 }
 
+export interface SlackProviderPersona {
+  user_id: string;
+  team_id?: string | null;
+  username?: string | null;
+  real_name?: string | null;
+  display_name?: string | null;
+  email?: string | null;
+  title?: string | null;
+  phone?: string | null;
+  image_url?: string | null;
+  is_bot?: boolean | null;
+  updated?: number | null;
+  profile: Record<string, unknown>;
+}
+
+export interface LinearProviderPersona {
+  user_id: string;
+  name?: string | null;
+  display_name?: string | null;
+  email?: string | null;
+  active: boolean;
+  avatar_url?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProviderPersonasPayload {
+  slack: SlackProviderPersona[];
+  linear: LinearProviderPersona[];
+}
+
 export interface EventEnvelope {
   id: string;
   domain: string;

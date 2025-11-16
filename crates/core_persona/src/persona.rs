@@ -14,6 +14,10 @@ impl PersonaId {
 }
 
 /// Uniquely identifies a persona/alias within a specific domain.
+///
+/// The `local_id` field stores the provider's own identifier (e.g., Slack user ID,
+/// Linear user UUID). "Local" means "local to that domain/provider", not "local to
+/// our system". The UI labels this as "Remote ID" to avoid confusion.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PersonaKey {
     pub domain: Domain,

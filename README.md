@@ -54,6 +54,7 @@ After installation, invoke `vibeos slack mirror ...` directly.
 Creates JSONL files under `SLACK_MIRROR_DIR` (default `./slack_mirror`):
 - `conversations/<channel_id>.jsonl`
 - `threads/<channel_id>_<thread_ts>.jsonl`
+- `profiles/<user_id>.jsonl` – chronological snapshots from `users.list` (names, bios, emails, avatars, custom fields)
 
 Handles pagination, threaded replies, gzip/brotli, and Slack 429 rate limiting.
 
@@ -61,6 +62,7 @@ The mirror is **incremental and append-only**:
 - Each run inspects existing JSONL files to find the latest Slack `ts` stored per conversation/thread, fetches only newer records via `oldest=...`, and appends them.
 - When Slack has no new activity, rerunning the command is idempotent—the files stay byte-for-byte identical.
 - Because only new timestamps are ingested, edits, deletions, and reaction changes to older messages are ignored; rerun after new posts/replies land to capture the latest context.
+- The user directory is refreshed on every run. If a profile field changes (e.g. display name, bio, email), a new JSONL entry is appended so downstream identity tooling can pre-fill personas or audit historical bios.
 
 ### Create a Linear Issue
 
@@ -87,11 +89,13 @@ Creates/updates a Linear mirror under `VIBEOS_LINEAR_MIRROR_DIR` (default `./lin
 - `issues.jsonl` – canonical latest snapshot per issue (upserted via `updatedAt` filters, so reruns only fetch and rewrite changed issues)
 - `events.N.jsonl` – append-only history shards capped at ~1 MB each (`events.0.jsonl` is the active log, older shards shift to `events.1.jsonl`, `events.2.jsonl`, …)
 - `meta.json` – tracks `last_full_sync_at` to make subsequent syncs incremental and stores the workspace name
+- `users/<user_id>.jsonl` – Linear user directory snapshots (name, display name, email, avatar, active flag, timestamps)
 
 The sync is idempotent:
 - Re-running adds only new issue updates and new events; unchanged issues/events leave their files untouched
 - Historical events are never refetched—new entries append to the active shard, and automatic log rotation preserves older shards for analysis (`linear events`, `stale`, etc. read all shards)
 - Because `issues.jsonl` is canonical, edits, state changes, and deletions are reflected immediately on the next run even though older event shards remain immutable
+- The user directory is always crawled in full. A new snapshot is appended whenever Linear reports a change so persona linking can pre-populate identity metadata.
 
 ### Serve the dashboard API
 
@@ -137,6 +141,13 @@ By default it targets `http://localhost:3000/api`. Override via `VITE_API_BASE`.
    ```
 
 3. Add your changes and craft a C4-style commit summary (per project guidelines), then push.
+
+For a quick local loop, use the helper scripts:
+
+```bash
+./priv/scripts/start-dev.sh   # launches API + Vite dev server (logs under .dev-pids/)
+./priv/scripts/stop-dev.sh    # stops both processes and cleans up PID/log files
+```
 
 ---
 

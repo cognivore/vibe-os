@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -16,9 +17,11 @@ const CONVERSATIONS_HISTORY: &str = "conversations.history";
 const CONVERSATIONS_REPLIES: &str = "conversations.replies";
 const CONVERSATIONS_JOIN: &str = "conversations.join";
 const CONVERSATION_TYPES: &str = "public_channel,private_channel,im,mpim";
+const USERS_LIST: &str = "users.list";
 const DEFAULT_RETRY_AFTER_SECS: u64 = 60;
 const CONVERSATIONS_DIR: &str = "conversations";
 const THREADS_DIR: &str = "threads";
+const PROFILES_DIR: &str = "profiles";
 const JSONL_EXTENSION: &str = "jsonl";
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +78,20 @@ struct ConversationsRepliesResponse {
 struct ConversationsJoinResponse {
     ok: bool,
     error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsersListResponse {
+    ok: bool,
+    members: Option<Vec<Value>>,
+    response_metadata: Option<ResponseMetadata>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SlackUserSnapshot {
+    fetched_at: DateTime<Utc>,
+    user: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,6 +221,9 @@ impl SlackClient {
                 }
             }
         }
+
+        println!("Syncing Slack user profiles...");
+        self.sync_user_directory(output_dir).await?;
 
         Ok(())
     }
@@ -427,6 +447,79 @@ impl SlackClient {
         Ok(all_replies)
     }
 
+    async fn list_all_users(&self) -> Result<Vec<Value>> {
+        let mut all_users = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let mut params = Vec::new();
+            if let Some(ref c) = cursor {
+                params.push(("cursor", c.as_str()));
+            }
+
+            let response = self
+                .execute_request(
+                    self.http
+                        .get(api_url(USERS_LIST))
+                        .header("Authorization", format!("Bearer {}", self.token))
+                        .query(&params),
+                    USERS_LIST,
+                )
+                .await?;
+
+            let resp: UsersListResponse = response
+                .json()
+                .await
+                .context("Failed to parse users.list response")?;
+
+            if !resp.ok {
+                let error_msg = resp.error.as_deref().unwrap_or("unknown error");
+                anyhow::bail!("users.list returned ok=false: {}", error_msg);
+            }
+
+            all_users.extend(resp.members.unwrap_or_default());
+            cursor = next_cursor(resp.response_metadata);
+
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        Ok(all_users)
+    }
+
+    async fn sync_user_directory(&self, output_dir: &Path) -> Result<()> {
+        let profiles_dir = output_dir.join(PROFILES_DIR);
+        ensure_dir(&profiles_dir)?;
+
+        let users = self.list_all_users().await?;
+        let mut updated = 0usize;
+        let fetched_at = Utc::now();
+
+        for user in users {
+            let user_id = user
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Slack user missing id field"))?;
+            let snapshot = SlackUserSnapshot {
+                fetched_at,
+                user: user.clone(),
+            };
+            let path = profiles_dir.join(jsonl_name(user_id));
+            if profile_changed(&path, &snapshot.user)? {
+                append_jsonl(&path, &[snapshot])?;
+                updated += 1;
+            }
+        }
+
+        println!(
+            "Slack profile directory updated ({} user snapshots written)",
+            updated
+        );
+
+        Ok(())
+    }
+
     async fn execute_request(
         &self,
         builder: reqwest::RequestBuilder,
@@ -631,4 +724,35 @@ fn retry_after(response: &reqwest::Response) -> Duration {
         .and_then(|s| s.parse::<u64>().ok())
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_RETRY_AFTER_SECS))
+}
+
+fn profile_changed(path: &Path, new_user: &Value) -> Result<bool> {
+    if let Some(last) = read_last_snapshot::<SlackUserSnapshot>(path)? {
+        Ok(last.user != *new_user)
+    } else {
+        Ok(true)
+    }
+}
+
+fn read_last_snapshot<T>(path: &Path) -> Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut last = None;
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("Failed to read line from {}", path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let entry: T = serde_json::from_str(&line)
+            .with_context(|| format!("Failed to parse snapshot from {}", path.display()))?;
+        last = Some(entry);
+    }
+    Ok(last)
 }

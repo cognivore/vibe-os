@@ -6,6 +6,7 @@ import type {
   Identity,
   OperatorDescriptor,
   Persona,
+  ProviderPersonasPayload,
   RunOperatorResponse,
 } from "../types/core";
 
@@ -131,6 +132,10 @@ export async function listIdentities(): Promise<Identity[]> {
   return request("/api/identities");
 }
 
+export async function getProviderPersonas(): Promise<ProviderPersonasPayload> {
+  return request("/api/providers/personas");
+}
+
 export async function getIdentity(id: string): Promise<Identity> {
   return request(`/api/identities/${id}`);
 }
@@ -165,6 +170,15 @@ export async function attachPersona(
   return request(`/api/identities/${identityId}/personas`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function detachPersona(
+  identityId: string,
+  personaId: string,
+): Promise<Identity> {
+  return request(`/api/identities/${identityId}/personas/${personaId}`, {
+    method: "DELETE",
   });
 }
 

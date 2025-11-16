@@ -9,6 +9,7 @@ Cargo.lock
 slack_mirror/
 linear_mirror/
 arrows/
+.dev-pids/
 
 # Node.js
 node_modules/
