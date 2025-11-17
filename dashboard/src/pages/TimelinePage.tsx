@@ -167,26 +167,28 @@ export default function TimelinePage() {
             />
           )}
         </ScrollArea>
-        <div
-          className={`rounded-lg border border-border bg-card p-4 ${threadState.selectedThread ? "block" : "hidden lg:block"
+        <ScrollArea
+          className={`h-[65vh] rounded-lg border border-border bg-card ${threadState.selectedThread ? "block" : "hidden lg:block"
             }`}
         >
-          {threadState.selectedThread && SelectedPanel ? (
-            <SelectedPanel
-              entry={threadState.selectedThread as ThreadEntry}
-              identityLookup={timelineState.identityLookup}
-              personaLookup={timelineState.personaLookup}
-              onPersonaClick={handlePersonaClick}
-              onClose={threadState.clearSelection}
-              loading={threadState.loading}
-              error={threadState.error}
-            />
-          ) : (
-            <div className="text-sm text-muted-foreground">
-              Select a Slack or Linear thread to inspect the conversation.
-            </div>
-          )}
-        </div>
+          <div className="p-4">
+            {threadState.selectedThread && SelectedPanel ? (
+              <SelectedPanel
+                entry={threadState.selectedThread as ThreadEntry}
+                identityLookup={timelineState.identityLookup}
+                personaLookup={timelineState.personaLookup}
+                onPersonaClick={handlePersonaClick}
+                onClose={threadState.clearSelection}
+                loading={threadState.loading}
+                error={threadState.error}
+              />
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                Select a Slack or Linear thread to inspect the conversation.
+              </div>
+            )}
+          </div>
+        </ScrollArea>
       </div>
     </div>
   );

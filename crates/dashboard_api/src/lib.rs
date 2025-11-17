@@ -116,12 +116,12 @@ async fn background_slack_sync(token: String, mirror_dir: PathBuf) {
 
 async fn run_slack_sync(token: &str, mirror_dir: &PathBuf) -> Result<()> {
     info!("Syncing Slack mirror at {}", mirror_dir.display());
-    
+
     // Use the vibeos binary from target directory
     // This works because we're running from the workspace root
     use tokio::process::Command;
     let vibeos_path = std::env::current_dir()?.join("target/debug/vibeos");
-    
+
     let status = Command::new(&vibeos_path)
         .arg("slack")
         .arg("mirror")
@@ -129,10 +129,10 @@ async fn run_slack_sync(token: &str, mirror_dir: &PathBuf) -> Result<()> {
         .env("VIBEOS_SLACK_MIRROR_DIR", mirror_dir.display().to_string())
         .status()
         .await?;
-    
+
     if !status.success() {
         anyhow::bail!("Slack mirror sync exited with status: {}", status);
     }
-    
+
     Ok(())
 }
