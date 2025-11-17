@@ -102,10 +102,10 @@ async fn handler_not_found() -> impl IntoResponse {
 
 async fn background_slack_sync(token: String, mirror_dir: PathBuf) {
     info!("Starting background Slack sync (every 60 seconds)");
-    
+
     loop {
         sleep(Duration::from_secs(60)).await;
-        
+
         info!("Running background Slack sync...");
         match run_slack_sync(&token, &mirror_dir).await {
             Ok(()) => info!("Background Slack sync completed successfully"),
@@ -115,18 +115,18 @@ async fn background_slack_sync(token: String, mirror_dir: PathBuf) {
 }
 
 async fn run_slack_sync(token: &str, mirror_dir: &PathBuf) -> Result<()> {
-    // Import SlackClient from vibeos_cli
-    // Note: This requires vibeos_cli as a dependency
     info!("Syncing Slack mirror at {}", mirror_dir.display());
     
-    // For now, spawn the CLI command
-    // TODO: Extract SlackClient into a shared library
+    // Use the vibeos binary from target directory
+    // This works because we're running from the workspace root
     use tokio::process::Command;
-    let status = Command::new("vibeos")
+    let vibeos_path = std::env::current_dir()?.join("target/debug/vibeos");
+    
+    let status = Command::new(&vibeos_path)
         .arg("slack")
         .arg("mirror")
         .env("VIBEOS_SLACK_TOKEN", token)
-        .env("VIBEOS_SLACK_MIRROR_DIR", mirror_dir)
+        .env("VIBEOS_SLACK_MIRROR_DIR", mirror_dir.display().to_string())
         .status()
         .await?;
     
