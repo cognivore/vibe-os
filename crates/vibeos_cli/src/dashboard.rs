@@ -18,6 +18,7 @@ pub async fn serve(cfg: &Config) -> Result<()> {
         persona_root_dir: cfg.persona_root.clone(),
         bind,
         static_dir: cfg.dashboard_static_dir.clone(),
+        slack_token: Some(cfg.slack_token.clone()),
     };
 
     run_dashboard_server(settings).await

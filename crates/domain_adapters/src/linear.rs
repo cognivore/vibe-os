@@ -134,6 +134,14 @@ impl LinearCommentRecord {
         if let Some(identifier) = &self.issue_identifier {
             data_map.insert("issue_identifier".into(), Value::String(identifier.clone()));
         }
+        data_map.insert(
+            "created_at".into(),
+            Value::String(self.created_at.to_rfc3339()),
+        );
+        data_map.insert(
+            "updated_at".into(),
+            Value::String(self.updated_at.to_rfc3339()),
+        );
         if let Some(name) = &self.user_name {
             data_map.insert("actor_name".into(), Value::String(name.clone()));
         }

@@ -1,3 +1,5 @@
+pub mod app;
+pub mod commands;
 pub mod config;
 pub mod dashboard;
 pub mod haskllm;
@@ -7,3 +9,4 @@ pub mod linear_sync;
 pub mod llm;
 pub mod setup;
 pub mod slack;
+pub mod support;

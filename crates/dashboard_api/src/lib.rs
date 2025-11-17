@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use arrow_store::ArrowStore;
@@ -24,10 +25,15 @@ use core_persona::provider::{LinearProviderPersona, SlackProviderPersona};
 use core_persona::store::IdentityStore;
 use domain_adapters::{load_linear_personas, load_slack_personas, LinearAdapter, SlackAdapter};
 use serde::{Deserialize, Serialize};
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::{debug, info};
+use tower_http::trace::{
+    DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
+};
+use tracing::{debug, info, warn, Level};
 use uuid::Uuid;
 
 type AdapterHandle = Arc<dyn EventAdapter>;
@@ -41,6 +47,7 @@ struct AppState {
     meta: Arc<MetaSnapshot>,
     slack_mirror_dir: Arc<PathBuf>,
     linear_mirror_dir: Arc<PathBuf>,
+    slack_token: Option<Arc<String>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -82,6 +89,7 @@ pub struct DashboardServerSettings {
     pub persona_root_dir: PathBuf,
     pub bind: SocketAddr,
     pub static_dir: Option<PathBuf>,
+    pub slack_token: Option<String>,
 }
 
 pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<()> {
@@ -100,6 +108,11 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
             .map(|p| p.display().to_string()),
     };
 
+    let slack_token = settings.slack_token.map(|token| {
+        info!("Slack token detected; enabling on-demand Slack thread fetch");
+        Arc::new(token)
+    });
+
     let state = AppState {
         adapters: Arc::new(adapters),
         operator_registry,
@@ -108,6 +121,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         meta: Arc::new(meta),
         slack_mirror_dir: Arc::new(settings.slack_mirror_dir.clone()),
         linear_mirror_dir: Arc::new(settings.linear_mirror_dir.clone()),
+        slack_token,
     };
 
     let identity_routes = Router::new()
@@ -124,6 +138,12 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(DefaultMakeSpan::new().level(Level::DEBUG))
+        .on_request(DefaultOnRequest::new().level(Level::DEBUG))
+        .on_response(DefaultOnResponse::new().level(Level::DEBUG))
+        .on_failure(DefaultOnFailure::new().level(Level::ERROR));
+
     let api_router = Router::new()
         .route("/slack/threads/:channel/:thread_ts", get(get_slack_thread))
         .route("/domains", get(list_domains))
@@ -135,9 +155,10 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         .route("/meta", get(fetch_meta))
         .nest("/identities", identity_routes)
         .layer(cors)
+        .layer(trace_layer.clone())
         .with_state(state.clone());
 
-    let mut app = Router::new().nest("/api", api_router);
+    let mut app = Router::new().nest("/api", api_router).layer(trace_layer);
 
     if let Some(static_dir) = &settings.static_dir {
         let static_service = ServeDir::new(static_dir.clone())
@@ -357,14 +378,31 @@ async fn get_slack_thread(
         channel_id, thread_ts
     );
     let adapter = SlackAdapter::new(state.slack_mirror_dir.as_ref());
-    let mut events = adapter.load_thread(&channel_id, &thread_ts)?;
-    if events.is_empty() {
-        info!(
-            "slack thread not found channel={} thread_ts={}",
-            channel_id, thread_ts
-        );
-        return Err(AppError(anyhow!("thread not found")));
-    }
+    let mut events = match adapter.load_thread(&channel_id, &thread_ts) {
+        Ok(events) => {
+            if events.is_empty() {
+                fetch_thread_via_api_if_possible(
+                    &state,
+                    &channel_id,
+                    &thread_ts,
+                    "thread file empty in mirror",
+                )
+                .await?
+            } else {
+                info!(
+                    "Loaded {} Slack messages from mirror for channel={} thread_ts={}",
+                    events.len(),
+                    channel_id,
+                    thread_ts
+                );
+                events
+            }
+        }
+        Err(err) => {
+            let reason = err.to_string();
+            fetch_thread_via_api_if_possible(&state, &channel_id, &thread_ts, &reason).await?
+        }
+    };
     resolve_event_entities(&mut events, state.identity_store.clone()).await;
     events.sort_by(|a, b| a.at.cmp(&b.at));
     let (root, replies) = split_slack_thread(events, &thread_ts)?;
@@ -381,6 +419,196 @@ async fn get_slack_thread(
         root,
         replies,
     }))
+}
+
+async fn fetch_thread_via_api_if_possible(
+    state: &AppState,
+    channel_id: &str,
+    thread_ts: &str,
+    reason: &str,
+) -> Result<Vec<EventEnvelope>, AppError> {
+    if let Some(token) = state.slack_token.as_ref() {
+        info!(
+            "Slack thread channel={} thread_ts={} unavailable in mirror ({}); fetching from Slack API",
+            channel_id, thread_ts, reason
+        );
+        let token = token.clone();
+        let events = fetch_and_save_slack_thread(
+            token.as_ref(),
+            state.slack_mirror_dir.as_ref(),
+            channel_id,
+            thread_ts,
+        )
+        .await?;
+        info!(
+            "Fetched {} Slack messages from API for channel={} thread_ts={}",
+            events.len(),
+            channel_id,
+            thread_ts
+        );
+        Ok(events)
+    } else {
+        warn!(
+            "Slack thread channel={} thread_ts={} unavailable in mirror ({}) and no Slack token configured",
+            channel_id, thread_ts, reason
+        );
+        Err(AppError(anyhow!(
+            "Thread not in mirror and VIBEOS_SLACK_TOKEN not set: {}",
+            reason
+        )))
+    }
+}
+
+#[derive(Deserialize)]
+struct SlackApiResponse {
+    ok: bool,
+    messages: Option<Vec<serde_json::Value>>,
+    response_metadata: Option<SlackResponseMetadata>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SlackResponseMetadata {
+    next_cursor: Option<String>,
+}
+
+async fn fetch_slack_thread_from_api(
+    slack_token: &str,
+    channel_id: &str,
+    thread_ts: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let client = reqwest::Client::new();
+    let url = "https://slack.com/api/conversations.replies";
+    let mut messages = Vec::new();
+    let mut cursor: Option<String> = None;
+
+    loop {
+        let mut request = client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", slack_token))
+            .query(&[("channel", channel_id), ("ts", thread_ts)]);
+        if let Some(ref token) = cursor {
+            request = request.query(&[("cursor", token)]);
+        }
+
+        let response = request
+            .send()
+            .await
+            .context("Failed to fetch Slack thread from API")?;
+
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let wait = retry_after(&response);
+            warn!(
+                "Rate limited calling Slack API conversations.replies; retrying in {:?}",
+                wait
+            );
+            tokio::time::sleep(wait).await;
+            continue;
+        }
+
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "Slack API returned status {}: {:?}",
+                response.status(),
+                response.text().await
+            );
+        }
+
+        let api_response: SlackApiResponse = response
+            .json()
+            .await
+            .context("Failed to parse Slack API response")?;
+
+        if !api_response.ok {
+            anyhow::bail!(
+                "Slack API returned ok=false: {}",
+                api_response
+                    .error
+                    .unwrap_or_else(|| "unknown error".to_string())
+            );
+        }
+
+        messages.extend(api_response.messages.unwrap_or_default());
+        cursor = api_response
+            .response_metadata
+            .and_then(|meta| meta.next_cursor)
+            .filter(|token| !token.is_empty());
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    Ok(messages)
+}
+
+fn retry_after(response: &reqwest::Response) -> Duration {
+    response
+        .headers()
+        .get("Retry-After")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(60))
+}
+
+async fn fetch_and_save_slack_thread(
+    slack_token: &str,
+    slack_mirror_dir: &std::path::Path,
+    channel_id: &str,
+    thread_ts: &str,
+) -> Result<Vec<EventEnvelope>> {
+    info!(
+        "Fetching Slack thread channel={} thread_ts={} from Slack API",
+        channel_id, thread_ts
+    );
+    let messages = fetch_slack_thread_from_api(slack_token, channel_id, thread_ts).await?;
+    if messages.is_empty() {
+        anyhow::bail!(
+            "Slack API returned no messages for channel {} thread {}",
+            channel_id,
+            thread_ts
+        );
+    }
+
+    let threads_dir = slack_mirror_dir.join("threads");
+    fs::create_dir_all(&threads_dir)
+        .await
+        .with_context(|| format!("failed to ensure {}", threads_dir.display()))?;
+    let filename = format!("{}_{}.jsonl", channel_id, thread_ts.replace('.', "_"));
+    let file_path = threads_dir.join(&filename);
+    let mut file = fs::File::create(&file_path)
+        .await
+        .with_context(|| format!("failed to create {}", file_path.display()))?;
+    for message in &messages {
+        let payload = serde_json::to_vec(message)?;
+        file.write_all(&payload).await?;
+        file.write_all(b"\n").await?;
+    }
+    file.flush().await?;
+    info!(
+        "Persisted Slack thread channel={} thread_ts={} to {}",
+        channel_id,
+        thread_ts,
+        file_path.display()
+    );
+
+    let adapter = SlackAdapter::new(slack_mirror_dir);
+    let events = adapter
+        .load_thread(channel_id, thread_ts)
+        .with_context(|| {
+            format!(
+                "failed to reload Slack thread channel={} thread_ts={} after API fetch",
+                channel_id, thread_ts
+            )
+        })?;
+    if events.is_empty() {
+        anyhow::bail!(
+            "Slack thread channel={} thread_ts={} produced no events after fetch",
+            channel_id,
+            thread_ts
+        );
+    }
+    Ok(events)
 }
 
 async fn fetch_meta(State(state): State<AppState>) -> impl IntoResponse {
