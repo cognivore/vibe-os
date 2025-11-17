@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::info;
+use tracing::{debug, info};
 use uuid::Uuid;
 
 type AdapterHandle = Arc<dyn EventAdapter>;
@@ -56,6 +56,14 @@ struct MetaSnapshot {
 struct ProviderPersonasResponse {
     slack: Vec<SlackProviderPersona>,
     linear: Vec<LinearProviderPersona>,
+}
+
+#[derive(Debug, Serialize)]
+struct SlackThreadResponse {
+    thread_id: String,
+    channel_id: String,
+    root: EventEnvelope,
+    replies: Vec<EventEnvelope>,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +125,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         .allow_headers(Any);
 
     let api_router = Router::new()
+        .route("/slack/threads/:channel/:thread_ts", get(get_slack_thread))
         .route("/domains", get(list_domains))
         .route("/events", get(list_events))
         .route("/operators", get(list_operators))
@@ -337,6 +346,41 @@ async fn list_arrows(
         })
         .collect();
     Ok(Json(filtered))
+}
+
+async fn get_slack_thread(
+    State(state): State<AppState>,
+    Path((channel_id, thread_ts)): Path<(String, String)>,
+) -> Result<Json<SlackThreadResponse>, AppError> {
+    info!(
+        "fetching slack thread channel={} thread_ts={}",
+        channel_id, thread_ts
+    );
+    let adapter = SlackAdapter::new(state.slack_mirror_dir.as_ref());
+    let mut events = adapter.load_thread(&channel_id, &thread_ts)?;
+    if events.is_empty() {
+        info!(
+            "slack thread not found channel={} thread_ts={}",
+            channel_id, thread_ts
+        );
+        return Err(AppError(anyhow!("thread not found")));
+    }
+    resolve_event_entities(&mut events, state.identity_store.clone()).await;
+    events.sort_by(|a, b| a.at.cmp(&b.at));
+    let (root, replies) = split_slack_thread(events, &thread_ts)?;
+    debug!(
+        "loaded slack thread channel={} thread_ts={} root_ts={} replies={}",
+        &channel_id,
+        &thread_ts,
+        root.at,
+        replies.len()
+    );
+    Ok(Json(SlackThreadResponse {
+        thread_id: format!("{channel_id}:{thread_ts}"),
+        channel_id,
+        root,
+        replies,
+    }))
 }
 
 async fn fetch_meta(State(state): State<AppState>) -> impl IntoResponse {
@@ -573,6 +617,41 @@ async fn load_events_for_domains(
     events.sort_by(|a, b| a.at.cmp(&b.at));
     resolve_event_entities(&mut events, state.identity_store.clone()).await;
     Ok(events)
+}
+
+fn split_slack_thread(
+    mut events: Vec<EventEnvelope>,
+    thread_ts: &str,
+) -> Result<(EventEnvelope, Vec<EventEnvelope>)> {
+    if events.is_empty() {
+        anyhow::bail!("thread is empty");
+    }
+    events.sort_by(|a, b| a.at.cmp(&b.at));
+    let root_index = events.iter().position(|event| {
+        slack_event_thread_ts(event)
+            .map(|ts| ts == thread_ts)
+            .unwrap_or(false)
+    });
+    let root = match root_index {
+        Some(idx) => events.remove(idx),
+        None => events.remove(0),
+    };
+    Ok((root, events))
+}
+
+fn slack_event_thread_ts(event: &EventEnvelope) -> Option<String> {
+    match &event.data {
+        serde_json::Value::Object(map) => map
+            .get("thread_ts")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                map.get("ts")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            }),
+        _ => None,
+    }
 }
 
 async fn resolve_event_entities(events: &mut [EventEnvelope], store: Arc<Mutex<IdentityStore>>) {

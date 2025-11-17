@@ -214,3 +214,19 @@ export async function lookupIdentity(params: {
   return (await response.json()) as Identity | null;
 }
 
+export interface SlackThreadResponse {
+  thread_id: string;
+  channel_id: string;
+  root: EventEnvelope;
+  replies: EventEnvelope[];
+}
+
+export async function getSlackThread(
+  channelId: string,
+  threadTs: string,
+): Promise<SlackThreadResponse> {
+  return request(
+    `/api/slack/threads/${encodeURIComponent(channelId)}/${encodeURIComponent(threadTs)}`,
+  );
+}
+

@@ -24,6 +24,25 @@ impl SlackAdapter {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
+
+    pub fn load_thread(&self, channel_id: &str, thread_ts: &str) -> Result<Vec<EventEnvelope>> {
+        let threads_dir = self.root.join(THREADS_DIR);
+        let filename = thread_file_name(channel_id, thread_ts);
+        let direct = threads_dir.join(&filename);
+        let fallback = threads_dir.join(channel_id).join(&filename);
+        let path = if direct.exists() {
+            direct
+        } else if fallback.exists() {
+            fallback
+        } else {
+            anyhow::bail!(
+                "thread file not found for channel {} and ts {}",
+                channel_id,
+                thread_ts
+            );
+        };
+        read_thread_file(&path, channel_id, thread_ts, None)
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -95,6 +114,69 @@ fn slack_ts_to_datetime(ts: &str) -> Option<DateTime<Utc>> {
     DateTime::<Utc>::from_timestamp(seconds, nanos)
 }
 
+fn thread_file_name(channel_id: &str, thread_ts: &str) -> String {
+    let sanitized = thread_ts.replace('.', "_");
+    format!("{}_{}.jsonl", channel_id, sanitized)
+}
+
+fn parse_thread_file_info(path: &Path, fallback_channel: Option<&str>) -> Option<(String, String)> {
+    let stem = path.file_stem()?.to_string_lossy();
+    let parts: Vec<&str> = stem.split('_').collect();
+    if parts.len() >= 3 {
+        let channel_id = parts[0].to_string();
+        let thread_ts = format!("{}.{}", parts[1], parts[2]);
+        return Some((channel_id, thread_ts));
+    }
+    if parts.len() >= 2 {
+        if let Some(channel) = fallback_channel {
+            let thread_ts = format!("{}.{}", parts[0], parts[1]);
+            return Some((channel.to_string(), thread_ts));
+        }
+    }
+    None
+}
+
+fn read_thread_file(
+    path: &Path,
+    channel_id: &str,
+    thread_ts: &str,
+    window: Option<&TimeWindow>,
+) -> Result<Vec<EventEnvelope>> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut envelopes = Vec::new();
+    let mut has_window_hit = window.is_none();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: SlackMessageRecord = serde_json::from_str(&line).with_context(|| {
+            format!("failed to parse Slack thread message in {}", path.display())
+        })?;
+        let mut envelope = match record.into_envelope(channel_id) {
+            Some(env) => env,
+            None => continue,
+        };
+        envelope.kind = "slack.thread_message".into();
+        envelope.entity_id = Some(format!("{channel_id}:{thread_ts}"));
+        if let Some(window) = window {
+            if window.contains(&envelope.at) {
+                has_window_hit = true;
+            }
+        }
+        envelopes.push(envelope);
+    }
+
+    if window.is_some() && !has_window_hit {
+        return Ok(Vec::new());
+    }
+
+    envelopes.sort_by(|a, b| a.at.cmp(&b.at));
+    Ok(envelopes)
+}
+
 impl EventAdapter for SlackAdapter {
     fn domain(&self) -> Domain {
         Domain::Slack
@@ -162,73 +244,36 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
         return Ok(envelopes);
     }
 
-    for channel_entry in std::fs::read_dir(dir)? {
-        let channel_entry = channel_entry?;
-        if !channel_entry.file_type()?.is_dir() {
-            continue;
-        }
-        let channel_path = channel_entry.path();
-        let channel_id = channel_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
 
-        for thread_entry in std::fs::read_dir(&channel_path)? {
-            let thread_entry = thread_entry?;
-            if !thread_entry.file_type()?.is_file() {
-                continue;
-            }
-            let path = thread_entry.path();
+        if file_type.is_file() {
             if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                 continue;
             }
-
-            // First pass: check if ANY message in this thread is in the window
-            let file_check = File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-            let reader_check = BufReader::new(file_check);
-            let mut has_message_in_window = false;
-            for line in reader_check.lines() {
-                let line = line?;
-                if line.trim().is_empty() {
+            if let Some((channel_id, thread_ts)) = parse_thread_file_info(&path, None) {
+                let mut events = read_thread_file(&path, &channel_id, &thread_ts, Some(window))?;
+                envelopes.append(&mut events);
+            }
+        } else if file_type.is_dir() {
+            let channel_id = entry.file_name().to_string_lossy().to_string();
+            for nested in std::fs::read_dir(&path)? {
+                let nested = nested?;
+                if !nested.file_type()?.is_file() {
                     continue;
                 }
-                if let Ok(record) = serde_json::from_str::<SlackMessageRecord>(&line) {
-                    if let Some(at) = slack_ts_to_datetime(&record.ts) {
-                        if window.contains(&at) {
-                            has_message_in_window = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // If no message in window, skip this entire thread
-            if !has_message_in_window {
-                continue;
-            }
-
-            // Second pass: load ALL messages from this thread (not just those in window)
-            let file =
-                File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-            let reader = BufReader::new(file);
-            for line in reader.lines() {
-                let line = line?;
-                if line.trim().is_empty() {
+                let nested_path = nested.path();
+                if nested_path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                     continue;
                 }
-                let record: SlackMessageRecord =
-                    serde_json::from_str(&line).with_context(|| {
-                        format!("failed to parse Slack thread message in {}", path.display())
-                    })?;
-                let thread_ts = record.thread_ts.clone();
-                if let Some(mut envelope) = record.into_envelope(&channel_id) {
-                    envelope.kind = "slack.thread_message".into();
-                    if let Some(thread_ts) = thread_ts {
-                        envelope.entity_id = Some(format!("{channel_id}:{thread_ts}"));
-                    }
-                    // Load ALL messages, not just those in window
-                    envelopes.push(envelope);
+                if let Some((channel_id, thread_ts)) =
+                    parse_thread_file_info(&nested_path, Some(&channel_id))
+                {
+                    let mut events =
+                        read_thread_file(&nested_path, &channel_id, &thread_ts, Some(window))?;
+                    envelopes.append(&mut events);
                 }
             }
         }

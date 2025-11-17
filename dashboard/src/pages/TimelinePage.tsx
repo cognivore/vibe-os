@@ -4,6 +4,7 @@ import {
   getArrows,
   getDomains,
   getEvents,
+  getSlackThread,
   listIdentities,
 } from "../api/client";
 import type {
@@ -65,6 +66,8 @@ export default function TimelinePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedThread, setSelectedThread] = useState<ThreadEntry | null>(null);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [threadError, setThreadError] = useState<string | null>(null);
 
   const loadIdentities = () => {
     listIdentities()
@@ -128,9 +131,22 @@ export default function TimelinePage() {
     [events],
   );
 
+  const handleThreadSelect = (entry: ThreadEntry) => {
+    setThreadError(null);
+    if (entry.type === "slack_thread") {
+      setThreadLoading(!entry.isComplete);
+    } else {
+      setThreadLoading(false);
+    }
+    setSelectedThread(entry);
+  };
+
   useEffect(() => {
     if (!selectedThread) return;
     if (selectedThread.type === "slack_thread") {
+      if (selectedThread.isComplete) {
+        return;
+      }
       const updated = slackThreadEntries.find(
         (thread) => thread.threadId === selectedThread.threadId,
       );
@@ -146,6 +162,64 @@ export default function TimelinePage() {
       }
     }
   }, [slackThreadEntries, linearThreadEntries, selectedThread]);
+
+  useEffect(() => {
+    if (!selectedThread || selectedThread.type !== "slack_thread") {
+      setThreadLoading(false);
+      return;
+    }
+    if (selectedThread.isComplete) {
+      setThreadLoading(false);
+      return;
+    }
+    const parsed = parseThreadKey(selectedThread.threadId);
+    if (!parsed) {
+      setThreadLoading(false);
+      setThreadError("Invalid Slack thread identifier");
+      return;
+    }
+    setThreadLoading(true);
+    let cancelled = false;
+    getSlackThread(parsed.channelId, parsed.threadTs)
+      .then((response) => {
+        if (cancelled) return;
+        setThreadError(null);
+        setSelectedThread((prev) => {
+          if (
+            !prev ||
+            prev.type !== "slack_thread" ||
+            prev.threadId !== response.thread_id
+          ) {
+            return prev;
+          }
+          const latestAt =
+            response.replies.length > 0
+              ? response.replies[response.replies.length - 1].at
+              : response.root.at;
+          return {
+            ...prev,
+            channelId: response.channel_id ?? prev.channelId,
+            root: response.root,
+            replies: response.replies,
+            at: latestAt,
+            isComplete: true,
+          };
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setThreadError(err?.message ?? "Failed to load Slack thread");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setThreadLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedThread]);
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const nonThreadEvents = events.filter(
@@ -300,7 +374,7 @@ export default function TimelinePage() {
               identityLookup={identityLookup}
               personaLookup={personaLookup}
               onPersonaClick={handlePersonaClick}
-              onThreadSelect={(thread) => setSelectedThread(thread)}
+              onThreadSelect={handleThreadSelect}
               activeThreadKey={
                 selectedThread ? threadKey(selectedThread) : undefined
               }
@@ -316,6 +390,8 @@ export default function TimelinePage() {
             selectedThread.type === "slack_thread" ? (
               <SlackThreadPanel
                 thread={selectedThread}
+                loading={threadLoading}
+                error={threadError}
                 identityLookup={identityLookup}
                 personaLookup={personaLookup}
                 onClose={() => setSelectedThread(null)}
@@ -461,11 +537,15 @@ function buildLinearThreadEntries(events: EventEnvelope[]): LinearThreadEntry[] 
 
 function SlackThreadPanel({
   thread,
+  loading,
+  error,
   identityLookup,
   personaLookup,
   onClose,
 }: {
   thread: SlackThreadEntry;
+  loading: boolean;
+  error?: string | null;
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
   onClose: () => void;
@@ -480,8 +560,12 @@ function SlackThreadPanel({
 
   // Extract reply_count from root message if available
   const rootData = thread.root.data as SlackEventData & { reply_count?: number };
-  const totalReplyCount = typeof rootData.reply_count === "number" ? rootData.reply_count : null;
-  const hasMoreMessages = totalReplyCount !== null && thread.replies.length < totalReplyCount;
+  const totalReplyCount =
+    typeof rootData.reply_count === "number" ? rootData.reply_count : null;
+  const hasMoreMessages =
+    !thread.isComplete &&
+    totalReplyCount !== null &&
+    thread.replies.length < totalReplyCount;
 
   return (
     <div className="flex h-full flex-col gap-4">
@@ -504,6 +588,12 @@ function SlackThreadPanel({
           Close
         </Button>
       </div>
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Refreshing full thread…</p>
+      ) : null}
+      {error ? (
+        <p className="text-xs text-destructive-foreground">{error}</p>
+      ) : null}
       <div className="flex-1 space-y-3 overflow-y-auto pr-2">
         {messages.map((message) => (
           <SlackThreadMessage
@@ -595,6 +685,14 @@ function threadKey(thread: ThreadEntry) {
   return thread.type === "slack_thread"
     ? `slack:${thread.threadId}`
     : `linear:${thread.issueId}`;
+}
+
+function parseThreadKey(threadId: string) {
+  const [channelId, ...rest] = threadId.split(":");
+  if (!channelId || rest.length === 0) {
+    return null;
+  }
+  return { channelId, threadTs: rest.join(":") };
 }
 
 function SlackThreadMessage({

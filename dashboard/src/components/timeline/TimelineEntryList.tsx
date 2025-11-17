@@ -16,6 +16,7 @@ export interface SlackThreadEntry {
   at: string;
   root: EventEnvelope;
   replies: EventEnvelope[];
+  isComplete?: boolean;
 }
 
 export type TimelineEntry =
