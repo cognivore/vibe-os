@@ -10,6 +10,7 @@ slack_mirror/
 linear_mirror/
 arrows/
 .dev-pids/
+personas/identities.json
 
 # Node.js
 node_modules/
