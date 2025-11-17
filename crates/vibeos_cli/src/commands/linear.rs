@@ -8,6 +8,7 @@ use clap::Subcommand;
 use crate::app::AppContext;
 use crate::commands::CliCommand;
 use crate::config;
+use crate::easy_send;
 use crate::linear;
 use crate::linear_analysis;
 use crate::linear_sync;
@@ -31,6 +32,9 @@ pub enum LinearCommand {
         /// Optional numeric priority (0..4)
         #[arg(long)]
         priority: Option<i32>,
+        /// Optional assignee ID (UUID-like string)
+        #[arg(long)]
+        assignee_id: Option<String>,
     },
     /// Full sync of Linear workspace issues and history to local disk
     Sync {
@@ -83,6 +87,11 @@ pub enum LinearCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Create issue from friendly YAML or pipe format (user@team)
+    EasySend {
+        /// Path to YAML file (if not provided, reads from stdin)
+        file: Option<PathBuf>,
+    },
 }
 
 #[async_trait]
@@ -94,11 +103,12 @@ impl CliCommand for LinearCommand {
                 title,
                 description,
                 priority,
+                assignee_id,
             } => {
                 let api_key = config::linear_api_key()?;
                 let client = linear::LinearClient::new(api_key);
                 let issue = client
-                    .create_issue(team_id, title, description, *priority)
+                    .create_issue(team_id, title, description, *priority, assignee_id.as_deref())
                     .await?;
 
                 println!("Created issue {} (id={})", issue.identifier, issue.id);
@@ -218,6 +228,52 @@ impl CliCommand for LinearCommand {
                 } else {
                     print_browse_results(&filtered);
                 }
+
+                Ok(())
+            }
+            LinearCommand::EasySend { file } => {
+                let cfg = ctx.config()?;
+
+                // Read input from file or stdin
+                let input = easy_send::read_input_from_file_or_stdin(file.as_deref())?;
+
+                // Parse the input (YAML or pipe format)
+                let request = easy_send::parse_easy_send_input(&input)?;
+
+                // Load Linear mirror to match names to IDs
+                let issues = linear_analysis::load_issues(&cfg.linear_mirror_dir)?;
+
+                // Match assignee and team, fail on ambiguity
+                let assignee_id = easy_send::match_assignee(&request.assignee, &issues)?;
+                let team_id = easy_send::match_team(&request.team, &issues)?;
+
+                // Compose the description
+                let description = format!("# Why\n\n{}\n\n# What\n\n{}", request.why, request.what);
+
+                // Create a title from the first line of "why"
+                let title = request
+                    .why
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("Untitled issue")
+                    .trim()
+                    .chars()
+                    .take(80)
+                    .collect::<String>();
+
+                // Create the issue
+                let api_key = config::linear_api_key()?;
+                let client = linear::LinearClient::new(api_key);
+                let issue = client
+                    .create_issue(&team_id, &title, &description, Some(1), Some(&assignee_id))
+                    .await?;
+
+                println!("Created issue {} (id={})", issue.identifier, issue.id);
+                if let Some(url) = issue.url {
+                    println!("  URL: {}", url);
+                }
+                println!("  Team: {}", request.team);
+                println!("  Assignee: {}", request.assignee);
 
                 Ok(())
             }

@@ -80,6 +80,7 @@ impl LinearClient {
         title: &str,
         description: &str,
         priority: Option<i32>,
+        assignee_id: Option<&str>,
     ) -> Result<LinearIssue> {
         let mut input = serde_json::json!({
             "teamId": team_id,
@@ -89,6 +90,10 @@ impl LinearClient {
 
         if let Some(prio) = priority {
             input["priority"] = serde_json::json!(prio);
+        }
+
+        if let Some(assignee) = assignee_id {
+            input["assigneeId"] = serde_json::json!(assignee);
         }
 
         let data: IssueCreateResponse = self

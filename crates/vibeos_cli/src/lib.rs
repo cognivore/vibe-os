@@ -2,6 +2,7 @@ pub mod app;
 pub mod commands;
 pub mod config;
 pub mod dashboard;
+pub mod easy_send;
 pub mod haskllm;
 pub mod linear;
 pub mod linear_analysis;

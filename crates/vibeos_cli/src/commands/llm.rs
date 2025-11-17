@@ -138,7 +138,7 @@ impl CliCommand for LlmCommand {
                     let description = compose_linear_description(issue, &thread, &suggestions);
                     let priority = map_priority(&issue.priority);
                     let created = linear_client
-                        .create_issue(team_id, &issue.title, &description, priority)
+                        .create_issue(team_id, &issue.title, &description, priority, None)
                         .await?;
 
                     if let Some(url) = &created.url {
