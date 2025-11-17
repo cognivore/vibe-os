@@ -96,11 +96,9 @@ impl SlackClient {
                 }
             }
 
-            // Sync threads for all conversation messages, not just new ones
-            // This ensures we update existing threads with new replies
-            let all_conversation_messages = super::storage::read_all_messages(&conversation_path)?;
-
-            for msg in &all_conversation_messages {
+            // Sync threads: prioritize new messages first, then check existing threads
+            // This balances fresh content with keeping existing threads up to date
+            for msg in &new_messages {
                 if should_fetch_thread(msg) {
                     let thread_ts = msg.thread_ts.as_deref().unwrap_or(&msg.ts);
                     let thread_path = threads_dir.join(thread_filename(&conv.id, thread_ts));
@@ -113,7 +111,7 @@ impl SlackClient {
 
                     match (last_thread_ts.is_some(), new_replies.is_empty()) {
                         (_, true) => {
-                            // Thread up to date, skip logging to avoid spam
+                            // Thread up to date
                         }
                         (true, false) => {
                             append_jsonl(&thread_path, &new_replies)?;

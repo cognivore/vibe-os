@@ -33,13 +33,6 @@ pub(super) fn latest_ts_from_file(path: &Path) -> Result<Option<String>> {
     Ok(latest_ts(&messages))
 }
 
-pub(super) fn read_all_messages(path: &Path) -> Result<Vec<SlackMessage>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    read_jsonl(path)
-}
-
 pub(super) fn append_jsonl<T: Serialize>(path: &Path, entries: &[T]) -> Result<()> {
     if entries.is_empty() {
         return Ok(());
