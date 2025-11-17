@@ -10,4 +10,4 @@ core_model = { path = "../core_model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 core_persona = { path = "../core_persona" }
-
+tracing = { workspace = true }

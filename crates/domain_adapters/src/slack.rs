@@ -12,6 +12,7 @@ use core_model::domain::Domain;
 use core_model::event::EventEnvelope;
 use core_model::time::TimeWindow;
 use core_persona::persona::PersonaKey;
+use tracing::debug;
 
 const CONVERSATIONS_DIR: &str = "conversations";
 const THREADS_DIR: &str = "threads";
@@ -41,7 +42,15 @@ impl SlackAdapter {
                 thread_ts
             );
         };
-        read_thread_file(&path, channel_id, thread_ts, None)
+        let events = read_thread_file(&path, channel_id, thread_ts, None)?;
+        debug!(
+            channel_id,
+            thread_ts,
+            message_count = events.len(),
+            path = %path.display(),
+            "Loaded Slack thread from mirror"
+        );
+        Ok(events)
     }
 }
 
@@ -196,6 +205,10 @@ impl EventAdapter for SlackAdapter {
             envelopes.extend(read_thread_events(&threads_dir, window)?);
         }
 
+        // Deduplicate by event ID (conversations and threads may contain the same messages)
+        let mut seen = std::collections::HashSet::new();
+        envelopes.retain(|env| seen.insert(env.id.clone()));
+
         envelopes.sort_by(|a, b| a.at.cmp(&b.at));
         Ok(envelopes)
     }
@@ -254,7 +267,23 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
                 continue;
             }
             if let Some((channel_id, thread_ts)) = parse_thread_file_info(&path, None) {
-                let mut events = read_thread_file(&path, &channel_id, &thread_ts, Some(window))?;
+                if !thread_has_message_in_window(&path, window)? {
+                    debug!(
+                        channel_id = %channel_id,
+                        thread_ts = %thread_ts,
+                        path = %path.display(),
+                        "Skipping Slack thread outside requested window (top-level)"
+                    );
+                    continue;
+                }
+                let mut events = read_thread_file(&path, &channel_id, &thread_ts, None)?;
+                debug!(
+                    channel_id = %channel_id,
+                    thread_ts = %thread_ts,
+                    message_count = events.len(),
+                    path = %path.display(),
+                    "Included Slack thread from mirror (top-level)"
+                );
                 envelopes.append(&mut events);
             }
         } else if file_type.is_dir() {
@@ -271,8 +300,23 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
                 if let Some((channel_id, thread_ts)) =
                     parse_thread_file_info(&nested_path, Some(&channel_id))
                 {
-                    let mut events =
-                        read_thread_file(&nested_path, &channel_id, &thread_ts, Some(window))?;
+                    if !thread_has_message_in_window(&nested_path, window)? {
+                        debug!(
+                            channel_id = %channel_id,
+                            thread_ts = %thread_ts,
+                            path = %nested_path.display(),
+                            "Skipping Slack thread outside requested window (nested)"
+                        );
+                        continue;
+                    }
+                    let mut events = read_thread_file(&nested_path, &channel_id, &thread_ts, None)?;
+                    debug!(
+                        channel_id = %channel_id,
+                        thread_ts = %thread_ts,
+                        message_count = events.len(),
+                        path = %nested_path.display(),
+                        "Included Slack thread from mirror (nested)"
+                    );
                     envelopes.append(&mut events);
                 }
             }
@@ -280,4 +324,23 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
     }
 
     Ok(envelopes)
+}
+
+fn thread_has_message_in_window(path: &Path, window: &TimeWindow) -> Result<bool> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let reader = BufReader::new(file);
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<SlackMessageRecord>(&line) {
+            if let Some(at) = slack_ts_to_datetime(&record.ts) {
+                if window.contains(&at) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }

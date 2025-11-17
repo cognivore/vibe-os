@@ -100,10 +100,7 @@ fn format_single_message(message: &SlackMessage) -> String {
 }
 
 fn sanitize_text(input: &str) -> String {
-    input
-        .replace(['\n', '\r'], " ")
-        .trim()
-        .to_string()
+    input.replace(['\n', '\r'], " ").trim().to_string()
 }
 
 fn conversation_path(root: &Path, conversation_id: &str) -> PathBuf {

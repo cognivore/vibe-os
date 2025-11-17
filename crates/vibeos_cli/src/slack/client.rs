@@ -5,7 +5,7 @@ use super::storage::{
     append_jsonl, ensure_dir, jsonl_name, latest_ts_from_file, profile_changed, thread_filename,
     write_jsonl,
 };
-use super::types::{SlackUserSnapshot, CONVERSATIONS_DIR, PROFILES_DIR, THREADS_DIR};
+use super::types::{SlackMessage, SlackUserSnapshot, CONVERSATIONS_DIR, PROFILES_DIR, THREADS_DIR};
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 
@@ -96,7 +96,11 @@ impl SlackClient {
                 }
             }
 
-            for msg in &new_messages {
+            // Sync threads for all conversation messages, not just new ones
+            // This ensures we update existing threads with new replies
+            let all_conversation_messages = super::storage::read_all_messages(&conversation_path)?;
+
+            for msg in &all_conversation_messages {
                 if should_fetch_thread(msg) {
                     let thread_ts = msg.thread_ts.as_deref().unwrap_or(&msg.ts);
                     let thread_path = threads_dir.join(thread_filename(&conv.id, thread_ts));
@@ -109,7 +113,7 @@ impl SlackClient {
 
                     match (last_thread_ts.is_some(), new_replies.is_empty()) {
                         (_, true) => {
-                            println!("  Thread {} already up to date", thread_path.display())
+                            // Thread up to date, skip logging to avoid spam
                         }
                         (true, false) => {
                             append_jsonl(&thread_path, &new_replies)?;
@@ -136,6 +140,15 @@ impl SlackClient {
         self.sync_user_directory(output_dir).await?;
 
         Ok(())
+    }
+
+    pub async fn fetch_full_thread(
+        &self,
+        channel_id: &str,
+        thread_ts: &str,
+    ) -> Result<Vec<SlackMessage>> {
+        self.fetch_thread_replies_since(channel_id, thread_ts, None)
+            .await
     }
 
     async fn sync_user_directory(&self, output_dir: &Path) -> Result<()> {

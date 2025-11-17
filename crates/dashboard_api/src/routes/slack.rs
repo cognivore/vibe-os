@@ -30,32 +30,32 @@ pub async fn get_slack_thread(
         "fetching slack thread channel={} thread_ts={}",
         channel_id, thread_ts
     );
-    let adapter = SlackAdapter::new(state.slack_mirror_dir.as_ref());
-    let mut events = match adapter.load_thread(&channel_id, &thread_ts) {
-        Ok(events) => {
-            if events.is_empty() {
-                fetch_thread_via_api_if_possible(
-                    &state,
-                    &channel_id,
-                    &thread_ts,
-                    "thread file empty in mirror",
-                )
-                .await?
-            } else {
-                info!(
-                    "Loaded {} Slack messages from mirror for channel={} thread_ts={}",
-                    events.len(),
-                    channel_id,
-                    thread_ts
-                );
-                events
-            }
-        }
-        Err(err) => {
-            let reason = err.to_string();
-            fetch_thread_via_api_if_possible(&state, &channel_id, &thread_ts, &reason).await?
-        }
+
+    // Always fetch fresh from API if token available for on-demand active sync
+    let mut events = if state.slack_token.is_some() {
+        info!(
+            "Fetching fresh Slack thread from API channel={} thread_ts={}",
+            channel_id, thread_ts
+        );
+        fetch_thread_via_api_if_possible(
+            &state,
+            &channel_id,
+            &thread_ts,
+            "fetching latest thread data",
+        )
+        .await?
+    } else {
+        // Fallback to mirror if no token
+        info!(
+            "No Slack token; loading thread from mirror channel={} thread_ts={}",
+            channel_id, thread_ts
+        );
+        let adapter = SlackAdapter::new(state.slack_mirror_dir.as_ref());
+        adapter
+            .load_thread(&channel_id, &thread_ts)
+            .map_err(|e| AppError(anyhow!("Thread not in mirror and no Slack token: {}", e)))?
     };
+
     resolve_event_entities(&mut events, state.identity_store.clone()).await;
     events.sort_by(|a, b| a.at.cmp(&b.at));
     let (root, replies) = split_slack_thread(events, &thread_ts)?;

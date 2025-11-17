@@ -27,4 +27,3 @@ arrow_store = { path = "../arrow_store" }
 dashboard_api = { path = "../dashboard_api" }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-

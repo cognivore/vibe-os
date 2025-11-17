@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ThreadAdapterRegistry,
   ThreadEntry,
   TimelineDataSource,
 } from "../adapters";
+import { threadKey } from "../threadUtils";
 
 interface ThreadSelectionParams {
   adapters: ThreadAdapterRegistry;
@@ -28,6 +29,7 @@ export function useThreadSelection({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectionNonce, setSelectionNonce] = useState(0);
+  const hydratedThreadKey = useRef<string | null>(null);
 
   const adapterMap = useMemo(
     () =>
@@ -41,16 +43,26 @@ export function useThreadSelection({
     setError(null);
     setSelectedThread(entry);
     setSelectionNonce((nonce) => nonce + 1);
+    hydratedThreadKey.current = null; // Reset hydration state on new selection
   }, []);
 
   const clearSelection = useCallback(() => {
     setSelectedThread(null);
     setError(null);
     setLoading(false);
+    hydratedThreadKey.current = null;
   }, []);
 
   useEffect(() => {
     if (!selectedThread) return;
+
+    const currentThreadKey = threadKey(selectedThread);
+    // Skip hydration if we've already hydrated this exact thread
+    if (hydratedThreadKey.current === currentThreadKey) {
+      setLoading(false);
+      return;
+    }
+
     const adapter = adapterMap.get(selectedThread.type);
     if (!adapter || !adapter.hydrate) {
       setLoading(false);
@@ -63,6 +75,7 @@ export function useThreadSelection({
       .hydrate(selectedThread, dataSource)
       .then((hydrated) => {
         if (!cancelled) {
+          hydratedThreadKey.current = currentThreadKey;
           setSelectedThread(hydrated);
           setError(null);
         }
@@ -84,14 +97,19 @@ export function useThreadSelection({
   }, [adapterMap, dataSource, selectedThread, selectionNonce]);
 
   useEffect(() => {
-    if (!selectedThread) return;
-    const updated = threadEntries.find((entry) =>
-      isSameThreadEntry(entry, selectedThread),
-    );
-    if (updated && updated !== selectedThread) {
-      setSelectedThread(updated);
-    }
-  }, [selectedThread, threadEntries]);
+    setSelectedThread((current) => {
+      if (!current) {
+        return current;
+      }
+      const updated = threadEntries.find((entry) =>
+        isSameThreadEntry(entry, current),
+      );
+      if (updated && updated !== current) {
+        return updated;
+      }
+      return current;
+    });
+  }, [threadEntries]);
 
   return {
     selectedThread,

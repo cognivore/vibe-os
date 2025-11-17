@@ -19,7 +19,7 @@ pub(super) fn jsonl_name(stem: &str) -> String {
     format!("{}.{}", stem, JSONL_EXTENSION)
 }
 
-pub(super) fn thread_filename(channel_id: &str, thread_ts: &str) -> String {
+pub fn thread_filename(channel_id: &str, thread_ts: &str) -> String {
     let sanitized_ts = thread_ts.replace('.', "_");
     format!("{}_{}.{}", channel_id, sanitized_ts, JSONL_EXTENSION)
 }
@@ -31,6 +31,13 @@ pub(super) fn latest_ts_from_file(path: &Path) -> Result<Option<String>> {
 
     let messages: Vec<SlackMessage> = read_jsonl(path)?;
     Ok(latest_ts(&messages))
+}
+
+pub(super) fn read_all_messages(path: &Path) -> Result<Vec<SlackMessage>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    read_jsonl(path)
 }
 
 pub(super) fn append_jsonl<T: Serialize>(path: &Path, entries: &[T]) -> Result<()> {
@@ -65,7 +72,7 @@ pub(super) fn append_jsonl<T: Serialize>(path: &Path, entries: &[T]) -> Result<(
         .with_context(|| format!("Failed to flush {}", path.display()))
 }
 
-pub(super) fn write_jsonl<T: Serialize>(path: &Path, entries: &[T]) -> Result<()> {
+pub fn write_jsonl<T: Serialize>(path: &Path, entries: &[T]) -> Result<()> {
     let file =
         File::create(path).with_context(|| format!("Failed to create file {}", path.display()))?;
     let mut writer = BufWriter::new(file);
@@ -81,7 +88,7 @@ pub(super) fn write_jsonl<T: Serialize>(path: &Path, entries: &[T]) -> Result<()
         .with_context(|| format!("Failed to flush {}", path.display()))
 }
 
-pub(super) fn read_jsonl<T>(path: &Path) -> Result<Vec<T>>
+pub fn read_jsonl<T>(path: &Path) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
 {

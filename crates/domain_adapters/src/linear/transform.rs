@@ -132,4 +132,3 @@ pub fn map_comment_record(
         actor_identity_id: None,
     }
 }
-

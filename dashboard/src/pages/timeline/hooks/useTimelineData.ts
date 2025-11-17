@@ -69,7 +69,6 @@ export function useTimelineData({
       dataSource.fetchEvents({
         domains: selectedDomains,
         window,
-        limit: 200,
       }),
       dataSource.fetchArrows(window),
     ])
