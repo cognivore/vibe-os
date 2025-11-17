@@ -1,4 +1,6 @@
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use arrow_store::ArrowStore;
@@ -9,11 +11,12 @@ use axum::Router;
 use core_operators::OperatorRegistry;
 use core_persona::store::IdentityStore;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{
     DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
 };
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 
 mod error;
 mod routes;
@@ -41,7 +44,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
             .map(|p| p.display().to_string()),
     };
 
-    let slack_token = settings.slack_token.map(|token| {
+    let slack_token = settings.slack_token.clone().map(|token| {
         info!("Slack token detected; enabling on-demand Slack thread fetch");
         Arc::new(token)
     });
@@ -56,6 +59,14 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         linear_mirror_dir: Arc::new(settings.linear_mirror_dir.clone()),
         slack_token,
     };
+
+    // Start background Slack sync task if token available
+    if let Some(token) = settings.slack_token {
+        let mirror_dir = settings.slack_mirror_dir.clone();
+        tokio::spawn(async move {
+            background_slack_sync(token, mirror_dir).await;
+        });
+    }
 
     let cors = routes::cors_layer();
     let trace_layer = TraceLayer::new_for_http()
@@ -87,4 +98,41 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
 
 async fn handler_not_found() -> impl IntoResponse {
     (StatusCode::NOT_FOUND, "Not found")
+}
+
+async fn background_slack_sync(token: String, mirror_dir: PathBuf) {
+    info!("Starting background Slack sync (every 60 seconds)");
+    
+    loop {
+        sleep(Duration::from_secs(60)).await;
+        
+        info!("Running background Slack sync...");
+        match run_slack_sync(&token, &mirror_dir).await {
+            Ok(()) => info!("Background Slack sync completed successfully"),
+            Err(e) => error!("Background Slack sync failed: {}", e),
+        }
+    }
+}
+
+async fn run_slack_sync(token: &str, mirror_dir: &PathBuf) -> Result<()> {
+    // Import SlackClient from vibeos_cli
+    // Note: This requires vibeos_cli as a dependency
+    info!("Syncing Slack mirror at {}", mirror_dir.display());
+    
+    // For now, spawn the CLI command
+    // TODO: Extract SlackClient into a shared library
+    use tokio::process::Command;
+    let status = Command::new("vibeos")
+        .arg("slack")
+        .arg("mirror")
+        .env("VIBEOS_SLACK_TOKEN", token)
+        .env("VIBEOS_SLACK_MIRROR_DIR", mirror_dir)
+        .status()
+        .await?;
+    
+    if !status.success() {
+        anyhow::bail!("Slack mirror sync exited with status: {}", status);
+    }
+    
+    Ok(())
 }
