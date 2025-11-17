@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { DomainDescriptor } from "../../types/core";
+import type { DomainDescriptor } from "../../../types/core";
 import type { TimelineDataSource } from "../adapters";
 
 export interface DomainSelectionState {

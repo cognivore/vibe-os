@@ -70,16 +70,16 @@ where
                 .await?;
             Ok((BTreeMap::from([("assistant".to_string(), assistant)]), None))
         }
-        Some(bodies) if bodies.is_empty() => {
-            let assistant = provider
-                .respond_text_with_tokens(credentials, model, &base_messages, max_tokens)
-                .await?;
-            Ok((
-                BTreeMap::from([("assistant".to_string(), assistant)]),
-                Some(Vec::new()),
-            ))
-        }
         Some(bodies) => {
+            if bodies.is_empty() {
+                let assistant = provider
+                    .respond_text_with_tokens(credentials, model, &base_messages, max_tokens)
+                    .await?;
+                return Ok((
+                    BTreeMap::from([("assistant".to_string(), assistant)]),
+                    Some(Vec::new()),
+                ));
+            }
             let mut messages = base_messages;
             messages.insert(0, ChatMessage::new("system", contract_system().to_string()));
             messages.push(ChatMessage::new("user", attachments_user_message(bodies)));

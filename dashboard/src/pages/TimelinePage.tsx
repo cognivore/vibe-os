@@ -4,10 +4,8 @@ import { format } from "date-fns";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { ScrollArea } from "../components/ui/scroll-area";
-import {
-  TimelineEntryList,
-  type PersonaClickTarget,
-} from "../components/timeline/TimelineEntryList";
+import { TimelineEntryList } from "../components/timeline/TimelineEntryList";
+import type { PersonaClickTarget } from "../components/timeline/types";
 import { useTimelineWindow, defaultTimelineWindow } from "./timeline/hooks/useTimelineWindow";
 import { useDomainSelection } from "./timeline/hooks/useDomainSelection";
 import { useTimelineData } from "./timeline/hooks/useTimelineData";

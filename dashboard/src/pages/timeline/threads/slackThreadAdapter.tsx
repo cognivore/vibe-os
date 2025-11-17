@@ -3,10 +3,12 @@ import { Button } from "../../../components/ui/button";
 import {
   SlackEventBody,
   SlackMessageLinks,
-  type SlackEventData,
-  type SlackThreadEntry,
-  type PersonaClickTarget,
-} from "../../../components/timeline/TimelineEntryList";
+} from "../../../components/timeline/entries/EventEntry";
+import type {
+  PersonaClickTarget,
+  SlackEventData,
+  SlackThreadEntry,
+} from "../../../components/timeline/types";
 import type { EventEnvelope, Identity, Persona } from "../../../types/core";
 import type {
   ThreadAdapter,

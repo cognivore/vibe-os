@@ -13,6 +13,12 @@ impl IdentityId {
     }
 }
 
+impl Default for IdentityId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Identity {
     pub id: IdentityId,

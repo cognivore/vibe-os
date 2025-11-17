@@ -11,7 +11,7 @@ import type {
   PersonaClickTarget,
   SlackThreadEntry,
   TimelineEntry,
-} from "../../components/timeline/TimelineEntryList";
+} from "../../components/timeline/types";
 import type { SlackThreadResponse } from "../../api/client";
 
 export interface TimelineWindow {
@@ -54,7 +54,7 @@ export interface ThreadAdapter<TEntry extends ThreadEntry = ThreadEntry> {
   Panel: ComponentType<ThreadPanelProps<TEntry>>;
 }
 
-export type ThreadAdapterRegistry = ThreadAdapter[];
+export type ThreadAdapterRegistry = ThreadAdapter<any>[];
 
 export interface TimelineDataResult {
   entries: TimelineEntry[];

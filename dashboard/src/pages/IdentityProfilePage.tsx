@@ -16,11 +16,11 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { ScrollArea } from "../components/ui/scroll-area";
-import {
-  TimelineEntryList,
-  type TimelineEntry,
-  type PersonaClickTarget,
-} from "../components/timeline/TimelineEntryList";
+import { TimelineEntryList } from "../components/timeline/TimelineEntryList";
+import type {
+  PersonaClickTarget,
+  TimelineEntry,
+} from "../components/timeline/types";
 import { format } from "date-fns";
 
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ss";

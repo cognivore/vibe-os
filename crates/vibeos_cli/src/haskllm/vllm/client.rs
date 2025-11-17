@@ -6,25 +6,27 @@ use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use super::{
+use crate::haskllm::{
     retry_with_backoff, ChatMessage, Credentials, JSONSchemaSpec, LLMFormatChat, RequestConfig,
 };
 
-const RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
-const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 8_192;
+use super::payload::{chat_messages_payload, concretize_chat_endpoint, extract_chat_content};
 
-static OPENAI_CLIENT: Lazy<Client> = Lazy::new(|| {
+const DEFAULT_BASE_URL: &str = "https://outland-dev-1.doubling-season.geosurge.ai";
+const DEFAULT_TEMPERATURE: f64 = 0.7;
+
+static VLLM_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .expect("failed to create OpenAI client")
+        .expect("failed to create vLLM client")
 });
 
 #[derive(Clone, Debug, Default)]
-pub struct OpenAI;
+pub struct Qwen;
 
 #[async_trait]
-impl LLMFormatChat for OpenAI {
+impl LLMFormatChat for Qwen {
     async fn respond_text(
         &self,
         credentials: &Credentials,
@@ -160,7 +162,7 @@ impl LLMFormatChat for OpenAI {
     }
 }
 
-impl OpenAI {
+impl Qwen {
     async fn make_text_request(
         &self,
         credentials: &Credentials,
@@ -169,17 +171,12 @@ impl OpenAI {
         max_tokens: Option<u32>,
         config: &RequestConfig,
     ) -> Result<String> {
-        let api_key = credentials.required_with_env("openai_api_key", "OPENAI_API_KEY")?;
-        let payload = json!({
-            "model": model,
-            "input": chat_messages_payload(messages),
-            "max_output_tokens": max_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
-        });
-
+        let (base_url, api_key) = self.credential_pair(credentials)?;
+        let payload = self.build_payload(model, messages, max_tokens, None);
         let value = self
-            .execute_request(&api_key, payload, config.timeout)
+            .execute_request(&base_url, &api_key, payload, config.timeout)
             .await?;
-        extract_responses_text(&value).context("OpenAI: missing output text")
+        extract_chat_content(&value).context("vLLM: missing content")
     }
 
     async fn make_json_request(
@@ -191,40 +188,60 @@ impl OpenAI {
         max_tokens: Option<u32>,
         config: &RequestConfig,
     ) -> Result<Value> {
-        let api_key = credentials.required_with_env("openai_api_key", "OPENAI_API_KEY")?;
-        let payload = json!({
+        let (base_url, api_key) = self.credential_pair(credentials)?;
+        let response_format = json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema.schema_name,
+                "schema": schema.schema,
+                "strict": schema.strict,
+            }
+        });
+        let payload = self.build_payload(model, messages, max_tokens, Some(response_format));
+        let value = self
+            .execute_request(&base_url, &api_key, payload, config.timeout)
+            .await?;
+        let content = extract_chat_content(&value).context("vLLM: missing content")?;
+        serde_json::from_str(&content)
+            .with_context(|| "vLLM: schema-enforced output was not valid JSON")
+    }
+
+    fn build_payload(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+        response_format: Option<Value>,
+    ) -> Value {
+        let mut payload = json!({
             "model": model,
-            "input": chat_messages_payload(messages),
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": schema.schema_name,
-                    "schema": schema.schema,
-                    "strict": schema.strict,
-                }
-            },
-            "max_output_tokens": max_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
+            "messages": chat_messages_payload(messages),
+            "temperature": DEFAULT_TEMPERATURE,
         });
 
-        let value = self
-            .execute_request(&api_key, payload, config.timeout)
-            .await?;
-        let stringified =
-            extract_responses_text(&value).context("OpenAI: missing JSON response text")?;
-        serde_json::from_str(&stringified)
-            .with_context(|| "OpenAI: schema-enforced output was not valid JSON")
+        if let Some(tokens) = max_tokens {
+            payload["max_tokens"] = json!(tokens);
+        }
+
+        if let Some(format) = response_format {
+            payload["response_format"] = format;
+        }
+
+        payload
     }
 
     async fn execute_request(
         &self,
+        base_url: &str,
         api_key: &str,
         payload: Value,
         timeout: Option<Duration>,
     ) -> Result<Value> {
-        let mut builder = OPENAI_CLIENT
-            .post(RESPONSES_URL)
-            .bearer_auth(api_key)
+        let url = concretize_chat_endpoint(base_url);
+        let mut builder = VLLM_CLIENT
+            .post(url)
             .header("Content-Type", "application/json")
+            .header("x-api-key", api_key)
             .json(&payload);
 
         if let Some(duration) = timeout {
@@ -234,92 +251,68 @@ impl OpenAI {
         let response = builder
             .send()
             .await
-            .context("OpenAI: failed to send request")?
+            .context("vLLM: failed to send request")?
             .error_for_status()
-            .context("OpenAI: HTTP error")?;
+            .context("vLLM: HTTP error")?;
 
         response
             .json::<Value>()
             .await
-            .context("OpenAI: failed to decode JSON payload")
-    }
-}
-
-fn chat_messages_payload(messages: &[ChatMessage]) -> Vec<Value> {
-    messages
-        .iter()
-        .map(|msg| {
-            json!({
-                "role": msg.role,
-                "content": msg.content,
-            })
-        })
-        .collect()
-}
-
-fn extract_responses_text(value: &Value) -> Option<String> {
-    match value.get("output_text") {
-        Some(Value::String(s)) => return Some(s.clone()),
-        Some(Value::Array(arr)) if arr.len() == 1 => {
-            if let Some(Value::String(s)) = arr.first() {
-                return Some(s.clone());
-            }
-        }
-        _ => {}
-    };
-
-    if let Some(Value::Array(output)) = value.get("output") {
-        let mut lines = Vec::new();
-        for entry in output {
-            if let Some(content) = entry
-                .as_object()
-                .and_then(|o| o.get("content"))
-                .and_then(|c| c.as_array())
-            {
-                for chunk in content {
-                    if let Some(text) = chunk
-                        .as_object()
-                        .and_then(|o| o.get("text"))
-                        .and_then(|t| t.as_str())
-                    {
-                        lines.push(text.to_owned());
-                    }
-                }
-            }
-        }
-        if !lines.is_empty() {
-            return Some(lines.join("\n"));
-        }
+            .context("vLLM: failed to decode JSON payload")
     }
 
-    None
+    fn credential_pair(&self, credentials: &Credentials) -> Result<(String, String)> {
+        let base = credentials
+            .get("base_url")
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("BLOOD_MONEY_BASE_URL").ok())
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        let api_key = credentials.required_with_env("api_key", "BLOOD_MONEY_API_KEY")?;
+        Ok((base, api_key))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn extracts_text_from_output_text_field() {
-        let value = json!({ "output_text": "hello" });
-        assert_eq!(extract_responses_text(&value), Some("hello".to_string()));
+    fn endpoint_already_complete() {
+        let input = "https://example.com/v1/chat/completions";
+        assert_eq!(
+            concretize_chat_endpoint(input),
+            "https://example.com/v1/chat/completions"
+        );
     }
 
     #[test]
-    fn extracts_text_from_output_array() {
-        let value = json!({
-            "output": [
-                {
-                    "content": [
-                        { "text": "alpha" },
-                        { "text": "beta" }
-                    ]
-                }
-            ]
-        });
+    fn endpoint_with_two_route() {
+        let input = "https://example.com/02";
         assert_eq!(
-            extract_responses_text(&value),
-            Some("alpha\nbeta".to_string())
+            concretize_chat_endpoint(input),
+            "https://example.com/02/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn endpoint_without_two_route() {
+        let input = "https://example.com";
+        assert_eq!(
+            concretize_chat_endpoint(input),
+            "https://example.com/02/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn payload_includes_messages() {
+        let qwen = Qwen;
+        let payload = qwen.build_payload(
+            "model",
+            &[ChatMessage::new("user", "hello")],
+            Some(120),
+            None,
+        );
+        assert_eq!(payload["max_tokens"], json!(120));
     }
 }

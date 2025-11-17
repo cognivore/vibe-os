@@ -6,14 +6,14 @@ import type {
   TimelineDataSource,
   TimelineWindow,
 } from "../adapters";
-import type { TimelineEntry } from "../../components/timeline/TimelineEntryList";
+import type { TimelineEntry } from "../../../components/timeline/types";
 import type {
   Arrow,
   DomainDescriptor,
   EventEnvelope,
   Identity,
   Persona,
-} from "../../types/core";
+} from "../../../types/core";
 
 export interface TimelineDataState extends TimelineDataResult {
   loading: boolean;

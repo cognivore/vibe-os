@@ -159,8 +159,6 @@ impl LinearClient {
             anyhow::bail!("GraphQL errors: {}", error_messages.join(", "));
         }
 
-        resp.data
-            .context("GraphQL response missing data")
-            .map_err(Into::into)
+        resp.data.context("GraphQL response missing data")
     }
 }

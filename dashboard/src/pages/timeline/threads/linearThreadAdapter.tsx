@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import { Button } from "../../../components/ui/button";
-import {
-  type LinearEventData,
-  type LinearThreadEntry,
-} from "../../../components/timeline/TimelineEntryList";
+import type {
+  LinearEventData,
+  LinearThreadEntry,
+} from "../../../components/timeline/types";
 import type { EventEnvelope, Identity, Persona } from "../../../types/core";
 import type { ThreadAdapter, ThreadPanelProps } from "../adapters";
 

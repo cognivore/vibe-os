@@ -13,6 +13,12 @@ impl PersonaId {
     }
 }
 
+impl Default for PersonaId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Uniquely identifies a persona/alias within a specific domain.
 ///
 /// The `local_id` field stores the provider's own identifier (e.g., Slack user ID,

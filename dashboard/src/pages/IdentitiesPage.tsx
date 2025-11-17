@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import {
   attachPersona,
   createIdentity,
@@ -14,17 +14,15 @@ import type {
   ProviderPersonasPayload,
   SlackProviderPersona,
 } from "../types/core";
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Badge } from "../components/ui/badge";
-import { ScrollArea } from "../components/ui/scroll-area";
-
-type ProviderMode = "slack" | "linear";
-
-const PROVIDER_LABELS: Record<ProviderMode, string> = {
-  slack: "Slack",
-  linear: "Linear",
-};
+import {
+  ProviderPersonaBrowser,
+} from "./identities/components/ProviderPersonaBrowser";
+import { LinkPersonaForm } from "./identities/components/LinkPersonaForm";
+import { CreateIdentityForm } from "./identities/components/CreateIdentityForm";
+import { MergeIdentitiesForm } from "./identities/components/MergeIdentitiesForm";
+import { IdentityList } from "./identities/components/IdentityList";
+import type { IdentityOption, ProviderMode } from "./identities/types";
+import { PROVIDER_LABELS } from "./identities/constants";
 
 export default function IdentitiesPage() {
   const [searchParams] = useSearchParams();
@@ -112,7 +110,7 @@ export default function IdentitiesPage() {
       .catch((err) => setError(err.message));
   }
 
-  const identityOptions = useMemo(
+  const identityOptions: IdentityOption[] = useMemo(
     () =>
       identities.map((identity) => ({
         id: identity.id,
@@ -267,355 +265,65 @@ export default function IdentitiesPage() {
         <p className="text-sm text-destructive-foreground">{error}</p>
       ) : null}
 
-      <Card>
-        <CardHeader className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div>
-            <CardTitle>{providerLabel} personas</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Select a persona to pre-fill the attach form. Already linked
-              personas show their identity.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {(["slack", "linear"] as ProviderMode[]).map((provider) => (
-              <Button
-                key={provider}
-                variant={providerMode === provider ? "default" : "outline"}
-                onClick={() => {
-                  setProviderMode(provider);
-                  setSelectedPersonaKey(null);
-                }}
-              >
-                {PROVIDER_LABELS[provider]}
-              </Button>
-            ))}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {personasForMode.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No personas mirrored yet for {providerLabel}. Run the mirror to
-              populate provider directories.
-            </p>
-          ) : (
-            <ScrollArea className="h-80 rounded border border-border">
-              <div className="divide-y divide-border">
-                {personasForMode.map((persona) => {
-                  const personaKey =
-                    providerMode === "slack"
-                      ? `slack:${persona.user_id}`
-                      : `linear:${persona.user_id}`;
-                  const linkedIdentity = personaLinks.get(personaKey);
-                  const isSelected = selectedPersonaKey === personaKey;
-                  const displayTitle =
-                    providerMode === "slack"
-                      ? (persona as SlackProviderPersona).display_name ??
-                        (persona as SlackProviderPersona).real_name ??
-                        persona.user_id
-                      : (persona as LinearProviderPersona).display_name ??
-                        (persona as LinearProviderPersona).name ??
-                        persona.user_id;
+      <ProviderPersonaBrowser
+        providerMode={providerMode}
+        providerLabel={providerLabel}
+        personas={personasForMode}
+        personaLinks={personaLinks}
+        selectedPersonaKey={selectedPersonaKey}
+        onProviderChange={(mode) => {
+          setProviderMode(mode);
+          setSelectedPersonaKey(null);
+        }}
+        onSlackPick={handleSlackPersonaPick}
+        onLinearPick={handleLinearPersonaPick}
+      />
 
-                  const email =
-                    (persona as SlackProviderPersona).email ??
-                    (persona as LinearProviderPersona).email ??
-                    null;
+      <LinkPersonaForm
+        providerLabel={providerLabel}
+        providerMode={providerMode}
+        identityOptions={identityOptions}
+        linkIdentityId={linkIdentityId}
+        linkLocalId={linkLocalId}
+        linkLabel={linkLabel}
+        linkDisplayName={linkDisplayName}
+        selectedPersonaKey={selectedPersonaKey}
+        onIdentityChange={setLinkIdentityId}
+        onLocalIdChange={setLinkLocalId}
+        onLabelChange={setLinkLabel}
+        onDisplayNameChange={setLinkDisplayName}
+        onSubmit={handleLink}
+        onClearSelection={() => {
+          setSelectedPersonaKey(null);
+          setLinkLocalId("");
+          setLinkLabel("");
+          setLinkDisplayName("");
+        }}
+        canSubmit={Boolean(linkLocalId)}
+      />
 
-                  const onPick =
-                    providerMode === "slack"
-                      ? () =>
-                          handleSlackPersonaPick(persona as SlackProviderPersona)
-                      : () =>
-                          handleLinearPersonaPick(
-                            persona as LinearProviderPersona,
-                          );
+      <CreateIdentityForm
+        email={createEmail}
+        name={createName}
+        onEmailChange={setCreateEmail}
+        onNameChange={setCreateName}
+        onSubmit={handleCreate}
+      />
 
-                  return (
-                    <div
-                      key={personaKey}
-                      role="button"
-                      tabIndex={0}
-                      className={`flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition cursor-pointer ${
-                        isSelected
-                          ? "bg-primary/10"
-                          : "hover:bg-muted/60 focus:bg-muted/60"
-                      }`}
-                      onClick={onPick}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          onPick();
-                        }
-                      }}
-                    >
-                      <div>
-                        <p className="font-medium">{displayTitle}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {email ?? "No email"} · {persona.user_id}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {linkedIdentity ? (
-                          <Badge variant="secondary">
-                            Linked to{" "}
-                            {linkedIdentity.preferred_name ??
-                              linkedIdentity.canonical_email}
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline">Unlinked</Badge>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onPick();
-                          }}
-                        >
-                          {linkedIdentity ? "View" : "Use"}
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </ScrollArea>
-          )}
-        </CardContent>
-      </Card>
+      <MergeIdentitiesForm
+        identityOptions={identityOptions}
+        primary={mergePrimary}
+        secondary={mergeSecondary}
+        onPrimaryChange={setMergePrimary}
+        onSecondaryChange={setMergeSecondary}
+        onSubmit={handleMerge}
+      />
 
-      <Card className={selectedPersonaKey ? "border-primary" : ""}>
-        <CardHeader>
-          <CardTitle>
-            Attach {providerLabel} persona to a canonical identity
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Pick a persona above or enter one manually.
-          </p>
-        </CardHeader>
-        <CardContent className="grid gap-2 text-sm md:grid-cols-2">
-          <label className="flex flex-col gap-1">
-            Identity
-            <select
-              className="rounded-md border border-input bg-background px-3 py-2"
-              value={linkIdentityId}
-              onChange={(e) => setLinkIdentityId(e.target.value)}
-            >
-              {identityOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-muted-foreground">
-            Provider
-            <input
-              className="rounded-md border border-input bg-muted px-3 py-2 text-foreground"
-              value={providerLabel}
-              readOnly
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Remote ID
-            <input
-              className="rounded-md border border-input bg-background px-3 py-2"
-              value={linkLocalId}
-              onChange={(e) => setLinkLocalId(e.target.value)}
-              placeholder={
-                providerMode === "slack" ? "U123456" : "usr_01J..."
-              }
-              title="The provider's user ID (e.g., Slack user ID or Linear user UUID)"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Label / handle
-            <input
-              className="rounded-md border border-input bg-background px-3 py-2"
-              value={linkLabel}
-              onChange={(e) => setLinkLabel(e.target.value)}
-              placeholder="@handle"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Display name (optional)
-            <input
-              className="rounded-md border border-input bg-background px-3 py-2"
-              value={linkDisplayName}
-              onChange={(e) => setLinkDisplayName(e.target.value)}
-            />
-          </label>
-          <div className="md:col-span-2 flex gap-2">
-            <Button onClick={handleLink} disabled={!linkLocalId}>
-              Attach persona
-            </Button>
-            {selectedPersonaKey && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setSelectedPersonaKey(null);
-                  setLinkLocalId("");
-                  setLinkLabel("");
-                  setLinkDisplayName("");
-                }}
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Create identity</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-2 text-sm md:grid-cols-2">
-          <label className="flex flex-col gap-1">
-            Canonical email
-            <input
-              className="rounded-md border border-input bg-background px-3 py-2"
-              value={createEmail}
-              onChange={(e) => setCreateEmail(e.target.value)}
-              placeholder="person@example.com"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            Preferred name (optional)
-            <input
-              className="rounded-md border border-input bg-background px-3 py-2"
-              value={createName}
-              onChange={(e) => setCreateName(e.target.value)}
-              placeholder="Ada Lovelace"
-            />
-          </label>
-          <div className="md:col-span-2">
-            <Button onClick={handleCreate} disabled={!createEmail.trim()}>
-              Create identity
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Merge identities</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-2 text-sm md:grid-cols-2">
-          <label className="flex flex-col gap-1">
-            Primary identity
-            <select
-              className="rounded-md border border-input bg-background px-3 py-2"
-              value={mergePrimary}
-              onChange={(e) => setMergePrimary(e.target.value)}
-            >
-              {identityOptions.map((option) => (
-                <option key={`${option.id}-primary`} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            Secondary identity
-            <select
-              className="rounded-md border border-input bg-background px-3 py-2"
-              value={mergeSecondary}
-              onChange={(e) => setMergeSecondary(e.target.value)}
-            >
-              {identityOptions.map((option) => (
-                <option key={`${option.id}-secondary`} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="md:col-span-2">
-            <Button
-              onClick={handleMerge}
-              disabled={
-                !mergePrimary ||
-                !mergeSecondary ||
-                mergePrimary === mergeSecondary
-              }
-            >
-              Merge identities
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        {identities.map((identity) => {
-          const missingProviders = (["slack", "linear"] as ProviderMode[]).filter(
-            (provider) =>
-              !identity.personas.some(
-                (persona) => persona.key.domain === provider,
-              ),
-          );
-          return (
-            <Card key={identity.id}>
-              <CardHeader>
-                <CardTitle>
-                  {identity.preferred_name ?? identity.canonical_email}
-                </CardTitle>
-                <p className="text-xs text-muted-foreground">
-                  {identity.canonical_email}
-                </p>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                {identity.personas.length === 0 ? (
-                  <p className="text-muted-foreground">No personas attached.</p>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {identity.personas.map((persona) => (
-                      <Badge
-                        key={persona.id}
-                        className="flex items-center gap-1"
-                      >
-                        <span>
-                          {persona.label ?? persona.key.local_id} (
-                          {persona.key.domain})
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDetach(identity.id, persona.id);
-                          }}
-                          className="ml-1 hover:text-destructive"
-                          title="Detach persona"
-                        >
-                          ×
-                        </button>
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-                {missingProviders.length ? (
-                  <div className="text-xs text-muted-foreground">
-                    Missing personas:
-                    {missingProviders.map((provider) => (
-                      <button
-                        key={`${identity.id}-${provider}`}
-                        className="ml-1 text-primary underline"
-                        onClick={() => startLinkFlow(identity.id, provider)}
-                      >
-                        {PROVIDER_LABELS[provider]}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                <Link
-                  to={`/identities/${identity.id}`}
-                  className="text-xs underline text-primary"
-                >
-                  View profile
-                </Link>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      <IdentityList
+        identities={identities}
+        onStartLink={startLinkFlow}
+        onDetach={handleDetach}
+      />
     </div>
   );
 }

@@ -1,26 +1,11 @@
+use std::future::Future;
+
 use anyhow::Result;
 use async_trait::async_trait;
 
-use std::future::Future;
+use crate::haskllm::{ChatMessage, Credentials, JSONSchemaSpec, LLMFormatChat, RequestConfig};
 
-use super::{ChatMessage, Credentials, JSONSchemaSpec, LLMFormatChat, RequestConfig};
-
-#[derive(Clone)]
-pub struct ProviderConfig<P> {
-    pub provider: P,
-    pub credentials: Credentials,
-    pub model_name: String,
-}
-
-impl<P> ProviderConfig<P> {
-    pub fn new(provider: P, credentials: Credentials, model_name: impl Into<String>) -> Self {
-        Self {
-            provider,
-            credentials,
-            model_name: model_name.into(),
-        }
-    }
-}
+use super::config::ProviderConfig;
 
 #[derive(Clone)]
 pub struct FallbackProvider<P1, P2> {

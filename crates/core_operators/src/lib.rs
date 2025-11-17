@@ -57,6 +57,12 @@ impl OperatorRegistry {
     }
 }
 
+impl Default for OperatorRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct SlackLinearAnalysisOperator {
     descriptor: OperatorDescriptor,
 }
