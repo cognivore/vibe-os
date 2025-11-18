@@ -250,7 +250,6 @@ impl OpenAI {
 
 #[cfg(test)]
 mod tests {
-    use super::payload::chat_messages_payload;
     use super::*;
 
     #[test]

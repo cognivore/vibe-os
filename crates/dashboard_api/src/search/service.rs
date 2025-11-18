@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use core_model::event::EventEnvelope;
 use core_model::time::TimeWindow;
 use core_types::Domain;
-use serde_json;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{AllQuery, BooleanQuery, Occur, Query, QueryParser, RangeQuery, TermQuery};

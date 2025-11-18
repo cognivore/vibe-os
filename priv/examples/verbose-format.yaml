@@ -1,0 +1,10 @@
+who: bob
+where: OPS
+why: |
+  Traditional verbose format with separate 'where' field for backward compatibility.
+  Some users prefer explicit field separation.
+what: |
+  - [ ] Investigate performance bottleneck
+  - [ ] Implement optimization
+  - [ ] Run benchmarks
+  - [ ] Document findings

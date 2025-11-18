@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -120,7 +120,7 @@ async fn background_slack_sync(token: String, mirror_dir: PathBuf) {
     }
 }
 
-async fn run_slack_sync(token: &str, mirror_dir: &PathBuf) -> Result<()> {
+async fn run_slack_sync(token: &str, mirror_dir: &Path) -> Result<()> {
     info!("Syncing Slack mirror at {}", mirror_dir.display());
 
     // Use the vibeos binary from target directory

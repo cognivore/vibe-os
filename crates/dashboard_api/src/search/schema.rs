@@ -3,7 +3,6 @@ use core_model::event::EventEnvelope;
 use core_persona::identity::IdentityId;
 use core_persona::persona::PersonaId;
 use core_types::Domain;
-use serde_json;
 use tantivy::schema::{Field, Schema, FAST, STORED, STRING, TEXT};
 use tantivy::TantivyDocument;
 
@@ -64,7 +63,7 @@ impl SearchSchema {
     pub fn document(&self, event: &EventEnvelope) -> Result<TantivyDocument> {
         let mut doc = TantivyDocument::new();
         doc.add_text(self.id, &event.id);
-        doc.add_text(self.domain, &Self::encode_domain(&event.domain));
+        doc.add_text(self.domain, Self::encode_domain(&event.domain));
         doc.add_text(self.kind, event.kind.as_str());
 
         if !event.summary.trim().is_empty() {
@@ -76,11 +75,11 @@ impl SearchSchema {
         }
 
         if let Some(persona_id) = event.actor_persona_id {
-            doc.add_text(self.persona, &persona_id_to_str(persona_id));
+            doc.add_text(self.persona, persona_id_to_str(persona_id));
         }
 
         if let Some(identity_id) = event.actor_identity_id {
-            doc.add_text(self.identity, &identity_id_to_str(identity_id));
+            doc.add_text(self.identity, identity_id_to_str(identity_id));
         }
 
         doc.add_i64(self.at, event.at.timestamp_millis());

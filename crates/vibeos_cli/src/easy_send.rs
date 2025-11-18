@@ -8,7 +8,7 @@ use crate::linear_sync::LinearIssueSnapshot;
 pub struct EasySendYaml {
     pub who: String,
     #[serde(rename = "where")]
-    pub where_: String,
+    pub where_: Option<String>,
     pub why: String,
     pub what: String,
 }
@@ -25,9 +25,35 @@ pub struct EasySendRequest {
 pub fn parse_easy_send_input(input: &str) -> Result<EasySendRequest> {
     // Try YAML format first
     if let Ok(yaml) = serde_yaml::from_str::<EasySendYaml>(input) {
+        // Support shorthand: "who: user@TEAM" or separate "who: user" + "where: TEAM"
+        let (assignee, team) = if yaml.who.contains('@') {
+            let parts: Vec<&str> = yaml.who.splitn(2, '@').collect();
+            if parts.len() != 2 {
+                bail!("Invalid who format with @, expected: user@TEAM");
+            }
+            let assignee = parts[0].trim().to_string();
+            let team_from_at = parts[1].trim().to_string();
+            
+            // If "where" is also specified, prefer "where" but warn about conflict
+            if let Some(where_team) = yaml.where_ {
+                if where_team != team_from_at {
+                    eprintln!("Warning: both '@' notation ({}) and 'where' field ({}) specified, using 'where' field", team_from_at, where_team);
+                }
+                (assignee, where_team)
+            } else {
+                (assignee, team_from_at)
+            }
+        } else {
+            // No @ in who, expect separate where field
+            match yaml.where_ {
+                Some(team) => (yaml.who, team),
+                None => bail!("Missing 'where' field and no @TEAM in 'who' field"),
+            }
+        };
+        
         return Ok(EasySendRequest {
-            assignee: yaml.who,
-            team: yaml.where_,
+            assignee,
+            team,
             why: yaml.why,
             what: yaml.what,
         });
@@ -68,7 +94,7 @@ fn parse_pipe_format(input: &str) -> Result<EasySendRequest> {
         .iter()
         .skip_while(|l| !l.trim().is_empty() || l.contains('@'))
         .skip(1) // skip the header line
-        .map(|l| *l)
+        .copied()
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -139,10 +165,10 @@ pub fn match_assignee(name: &str, issues: &[LinearIssueSnapshot]) -> Result<Stri
     for issue in issues {
         if let (Some(assignee_name), Some(assignee_id)) = (&issue.assignee_name, &issue.assignee_id)
         {
-            if assignee_name.to_lowercase().contains(&needle) {
-                if !matches.iter().any(|(_, id)| id == assignee_id) {
-                    matches.push((assignee_name.as_str(), assignee_id.as_str()));
-                }
+            if assignee_name.to_lowercase().contains(&needle)
+                && !matches.iter().any(|(_, id)| id == assignee_id)
+            {
+                matches.push((assignee_name.as_str(), assignee_id.as_str()));
             }
         }
     }
@@ -171,10 +197,8 @@ pub fn match_team(team_key: &str, issues: &[LinearIssueSnapshot]) -> Result<Stri
     // Collect unique team_key -> team_id mappings
     for issue in issues {
         if let (Some(key), Some(id)) = (&issue.team_key, &issue.team_id) {
-            if key.to_uppercase() == needle {
-                if !matches.iter().any(|(_, tid)| tid == id) {
-                    matches.push((key.as_str(), id.as_str()));
-                }
+            if key.to_uppercase() == needle && !matches.iter().any(|(_, tid)| tid == id) {
+                matches.push((key.as_str(), id.as_str()));
             }
         }
     }
@@ -249,5 +273,55 @@ Bloodmoney API key and base URL are hard-coded in frontend code.
         assert_eq!(result.team, "RAD");
         assert!(result.why.contains("Bloodmoney"));
         assert!(result.what.contains("Move API_BASE_URL"));
+    }
+
+    #[test]
+    fn test_parse_yaml_with_at_shorthand() {
+        let yaml = r#"
+who: cognivore@NIN
+why: |
+  Explore feature needs LLM-suggested dimensions for predictive caching.
+what: |
+  - [ ] Create /suggest endpoint in bloodmoney API
+  - [ ] Implement LLM-based dimension suggestions
+  - [ ] Deploy endpoint to production
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "cognivore");
+        assert_eq!(result.team, "NIN");
+        assert!(result.why.contains("Explore feature"));
+        assert!(result.what.contains("Create /suggest endpoint"));
+    }
+
+    #[test]
+    fn test_parse_yaml_with_at_and_where_prefers_where() {
+        let yaml = r#"
+who: cognivore@RAD
+where: NIN
+why: |
+  Test conflict resolution.
+what: |
+  - [ ] Test task
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "cognivore");
+        assert_eq!(result.team, "NIN"); // Should prefer 'where' field
+    }
+
+    #[test]
+    fn test_parse_yaml_missing_team_fails() {
+        let yaml = r#"
+who: cognivore
+why: |
+  Missing team.
+what: |
+  - [ ] Test task
+"#;
+
+        let result = parse_easy_send_input(yaml);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Missing 'where' field"));
     }
 }
