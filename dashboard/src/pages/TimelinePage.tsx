@@ -30,10 +30,6 @@ export default function TimelinePage() {
     () => [slackThreadAdapter, linearThreadAdapter],
     [],
   );
-  const consumedThreadDomains = useMemo(
-    () => new Set(threadAdapters.flatMap((adapter) => adapter.domains)),
-    [threadAdapters],
-  );
 
   const [searchQuery, setSearchQuery] = useState("");
   const windowState = useTimelineWindow(defaultTimelineWindow());
@@ -157,14 +153,36 @@ export default function TimelinePage() {
 
   const searchEventEntries = useMemo<TimelineEntry[]>(() => {
     if (!searchState.results.length) return [];
+
+    // Build a set of all entity_ids that are represented as threads in search results
+    const searchThreadEntityIds = new Set<string>();
+    searchThreadEntries.forEach((thread) => {
+      if (thread.type === "slack_thread") {
+        searchThreadEntityIds.add(thread.threadId);
+      } else if (thread.type === "linear_thread") {
+        searchThreadEntityIds.add(thread.issueId);
+      }
+    });
+
     return searchState.results
-      .filter((event) => !consumedThreadDomains.has(event.domain))
+      .filter((event) => {
+        // For Slack: filter out if entity_id matches a thread
+        if (event.domain === "slack" && event.entity_id) {
+          return !searchThreadEntityIds.has(event.entity_id);
+        }
+        // For Linear: filter out if entity_id matches an issue thread
+        if (event.domain === "linear" && event.entity_id) {
+          return !searchThreadEntityIds.has(event.entity_id);
+        }
+        // Keep all other events
+        return true;
+      })
       .map((event) => ({
         type: "event" as const,
         at: event.at,
         event,
       }));
-  }, [searchState.results, consumedThreadDomains]);
+  }, [searchState.results, searchThreadEntries]);
 
   const searchEntries = useMemo<TimelineEntry[]>(
     () =>

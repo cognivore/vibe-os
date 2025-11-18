@@ -118,12 +118,30 @@ export function useTimelineData({
   }, [events, threadAdapters]);
 
   const entries = useMemo<TimelineEntry[]>(() => {
-    const consumedDomains = new Set(
-      threadAdapters.flatMap((adapter) => adapter.domains),
-    );
-    const nonThreadEvents = events.filter(
-      (event) => !consumedDomains.has(event.domain),
-    );
+    // Build a set of all entity_ids that are represented as threads
+    const threadEntityIds = new Set<string>();
+    threadEntries.forEach((thread) => {
+      if (thread.type === "slack_thread") {
+        threadEntityIds.add(thread.threadId);
+      } else if (thread.type === "linear_thread") {
+        threadEntityIds.add(thread.issueId);
+      }
+    });
+
+    // Filter out events that are part of a thread
+    const nonThreadEvents = events.filter((event) => {
+      // For Slack: filter out if entity_id matches a thread
+      if (event.domain === "slack" && event.entity_id) {
+        return !threadEntityIds.has(event.entity_id);
+      }
+      // For Linear: filter out if entity_id matches an issue thread
+      if (event.domain === "linear" && event.entity_id) {
+        return !threadEntityIds.has(event.entity_id);
+      }
+      // Keep all other events
+      return true;
+    });
+
     const eventEntries: TimelineEntry[] = nonThreadEvents.map((event) => ({
       type: "event" as const,
       at: event.at,
@@ -137,7 +155,7 @@ export function useTimelineData({
     return [...eventEntries, ...arrowEntries, ...threadEntries].sort(
       (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
     );
-  }, [arrows, events, threadAdapters, threadEntries]);
+  }, [arrows, events, threadEntries]);
 
   const identityLookup = useMemo(
     () =>
