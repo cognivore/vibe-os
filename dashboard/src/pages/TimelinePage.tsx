@@ -153,7 +153,7 @@ export default function TimelinePage() {
 
   const searchEventEntries = useMemo<TimelineEntry[]>(() => {
     if (!searchState.results.length) return [];
-
+    
     // Build a set of all entity_ids that are represented as threads in search results
     const searchThreadEntityIds = new Set<string>();
     searchThreadEntries.forEach((thread) => {
@@ -166,12 +166,12 @@ export default function TimelinePage() {
 
     return searchState.results
       .filter((event) => {
+        // For Linear: ALWAYS filter out (always part of issue thread)
+        if (event.domain === "linear") {
+          return false;
+        }
         // For Slack: filter out if entity_id matches a thread
         if (event.domain === "slack" && event.entity_id) {
-          return !searchThreadEntityIds.has(event.entity_id);
-        }
-        // For Linear: filter out if entity_id matches an issue thread
-        if (event.domain === "linear" && event.entity_id) {
           return !searchThreadEntityIds.has(event.entity_id);
         }
         // Keep all other events

@@ -130,12 +130,12 @@ export function useTimelineData({
 
     // Filter out events that are part of a thread
     const nonThreadEvents = events.filter((event) => {
+      // For Linear: ALWAYS filter out (always part of issue thread)
+      if (event.domain === "linear") {
+        return false;
+      }
       // For Slack: filter out if entity_id matches a thread
       if (event.domain === "slack" && event.entity_id) {
-        return !threadEntityIds.has(event.entity_id);
-      }
-      // For Linear: filter out if entity_id matches an issue thread
-      if (event.domain === "linear" && event.entity_id) {
         return !threadEntityIds.has(event.entity_id);
       }
       // Keep all other events
