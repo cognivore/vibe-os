@@ -11,6 +11,7 @@ pub struct EasySendYaml {
     pub where_: Option<String>,
     pub why: String,
     pub what: String,
+    pub priority: Option<i32>,
 }
 
 #[derive(Debug)]
@@ -19,6 +20,7 @@ pub struct EasySendRequest {
     pub team: String,
     pub why: String,
     pub what: String,
+    pub priority: Option<i32>,
 }
 
 /// Parse input from either YAML file or stdin pipe format
@@ -33,7 +35,7 @@ pub fn parse_easy_send_input(input: &str) -> Result<EasySendRequest> {
             }
             let assignee = parts[0].trim().to_string();
             let team_from_at = parts[1].trim().to_string();
-            
+
             // If "where" is also specified, prefer "where" but warn about conflict
             if let Some(where_team) = yaml.where_ {
                 if where_team != team_from_at {
@@ -50,12 +52,13 @@ pub fn parse_easy_send_input(input: &str) -> Result<EasySendRequest> {
                 None => bail!("Missing 'where' field and no @TEAM in 'who' field"),
             }
         };
-        
+
         return Ok(EasySendRequest {
             assignee,
             team,
             why: yaml.why,
             what: yaml.what,
+            priority: yaml.priority,
         });
     }
 
@@ -105,6 +108,7 @@ fn parse_pipe_format(input: &str) -> Result<EasySendRequest> {
         team,
         why,
         what,
+        priority: None,
     })
 }
 
@@ -323,5 +327,39 @@ what: |
         let result = parse_easy_send_input(yaml);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Missing 'where' field"));
+    }
+
+    #[test]
+    fn test_parse_yaml_with_priority() {
+        let yaml = r#"
+who: alice@ENG
+priority: 2
+why: |
+  High priority task requiring immediate attention.
+what: |
+  - [ ] Address critical security issue
+  - [ ] Deploy hotfix
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "alice");
+        assert_eq!(result.team, "ENG");
+        assert_eq!(result.priority, Some(2));
+    }
+
+    #[test]
+    fn test_parse_yaml_without_priority() {
+        let yaml = r#"
+who: bob@OPS
+why: |
+  Regular task with no specific priority.
+what: |
+  - [ ] Update documentation
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "bob");
+        assert_eq!(result.team, "OPS");
+        assert_eq!(result.priority, None);
     }
 }
