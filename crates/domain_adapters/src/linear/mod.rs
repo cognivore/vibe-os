@@ -147,22 +147,21 @@ impl EventAdapter for LinearAdapter {
                 if line.trim().is_empty() {
                     continue;
                 }
-                let mut value: Value = serde_json::from_str(&line).with_context(|| {
+                let value: Value = serde_json::from_str(&line).with_context(|| {
                     format!("failed to parse Linear event in {}", path.display())
                 })?;
                 let record = serde_json::from_value(value.clone()).with_context(|| {
                     format!("failed to map Linear event schema in {}", path.display())
                 })?;
-                let envelope = map_event_record(record);
-                if let Some(issue_id) = envelope.entity_id.as_ref() {
+                let mut envelope = map_event_record(record);
+                // Extract the actual issue_id (UUID) from the data field for lookup
+                let issue_id = envelope.data.get("issue_id").and_then(|v| v.as_str());
+                if let Some(issue_id) = issue_id {
                     let summary = issue_summaries.get(issue_id);
-                    enrich_issue_metadata(&mut value, summary);
+                    enrich_issue_metadata(&mut envelope.data, summary);
                 }
                 if window.contains(&envelope.at) {
-                    envelopes.push(EventEnvelope {
-                        data: value,
-                        ..envelope
-                    });
+                    envelopes.push(envelope);
                 }
             }
         }

@@ -27,11 +27,7 @@ export function LinearThreadPreview({
   onThreadSelect,
   isActive,
 }: LinearThreadPreviewProps) {
-  const issueTitle =
-    entry.issueTitle ??
-    entry.issueIdentifier ??
-    entry.events[0]?.summary ??
-    "Linear issue";
+  const issueTitle = entry.issueTitle || entry.issueIdentifier || "Linear issue";
 
   // Extract metadata from the first event or comment
   const issueMetadata = useMemo(() => {
@@ -92,7 +88,7 @@ export function LinearThreadPreview({
             )}
           </div>
           {entry.issueDescription && (
-            <p className="text-sm text-muted-foreground line-clamp-3">
+            <p className="text-sm text-muted-foreground whitespace-pre-wrap">
               {entry.issueDescription}
             </p>
           )}

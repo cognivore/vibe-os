@@ -49,7 +49,7 @@ function buildLinearThreadEntries(events: EventEnvelope[]): LinearThreadEntry[] 
         map.set(issueId, {
           issueId,
           issueIdentifier: data.issue_identifier ?? undefined,
-          issueTitle: data.issue_title ?? event.summary ?? undefined,
+          issueTitle: data.issue_title ?? undefined,
           issueUrl: data.issue_url ?? undefined,
           issueDescription: data.issue_description ?? undefined,
           comments: [],
@@ -58,10 +58,19 @@ function buildLinearThreadEntries(events: EventEnvelope[]): LinearThreadEntry[] 
         });
       }
       const entry = map.get(issueId)!;
-      entry.issueIdentifier ??= data.issue_identifier ?? undefined;
-      entry.issueTitle ??= data.issue_title ?? event.summary ?? undefined;
-      entry.issueUrl ??= data.issue_url ?? undefined;
-      entry.issueDescription ??= data.issue_description ?? undefined;
+      // Accumulate metadata from any event that has it (prefer non-null values)
+      if (data.issue_identifier && !entry.issueIdentifier) {
+        entry.issueIdentifier = data.issue_identifier;
+      }
+      if (data.issue_title && !entry.issueTitle) {
+        entry.issueTitle = data.issue_title;
+      }
+      if (data.issue_url && !entry.issueUrl) {
+        entry.issueUrl = data.issue_url;
+      }
+      if (data.issue_description && !entry.issueDescription) {
+        entry.issueDescription = data.issue_description;
+      }
       if (new Date(event.at).getTime() > new Date(entry.at).getTime()) {
         entry.at = event.at;
       }
@@ -256,14 +265,33 @@ function LinearEventUpdate({
   onPersonaClick: ThreadPanelProps<LinearThreadEntry>["onPersonaClick"];
 }) {
   const actorLabel = resolveLinearActor(event, identityLookup, personaLookup);
+  const data = event.data as LinearEventData;
+
+  const stateChange =
+    data.from_state || data.to_state
+      ? `State: ${data.from_state ?? "—"} → ${data.to_state ?? "—"}`
+      : null;
+  const priorityChange =
+    typeof data.from_priority === "number" ||
+    typeof data.to_priority === "number"
+      ? `Priority: ${formatPriority(data.from_priority)} → ${formatPriority(
+          data.to_priority,
+        )}`
+      : null;
+
   return (
     <div className="rounded-lg border border-border bg-background/80 p-3 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <div className="font-medium">{actorLabel}</div>
         <p>{new Date(event.at).toLocaleString()}</p>
       </div>
-      <div className="mt-2 text-sm text-foreground">
-        <LinearEventBody event={event} />
+      <div className="mt-2 space-y-1 text-sm text-foreground">
+        {stateChange ? <p>{stateChange}</p> : null}
+        {priorityChange ? <p>{priorityChange}</p> : null}
+        {data.actor_name ? <p className="text-xs text-muted-foreground">Actor: {data.actor_name}</p> : null}
+        {!stateChange && !priorityChange && event.summary ? (
+          <p className="text-sm text-muted-foreground">{event.summary}</p>
+        ) : null}
       </div>
       <div className="mt-2">
         <ActorChip
@@ -275,6 +303,13 @@ function LinearEventUpdate({
       </div>
     </div>
   );
+}
+
+function formatPriority(value?: number | null) {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  return value.toString();
 }
 
 function resolveLinearActor(
