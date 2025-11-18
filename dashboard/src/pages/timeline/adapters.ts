@@ -12,7 +12,10 @@ import type {
   SlackThreadEntry,
   TimelineEntry,
 } from "../../components/timeline/types";
-import type { SlackThreadResponse } from "../../api/client";
+import type {
+  LinearIssueResponse,
+  SlackThreadResponse,
+} from "../../api/client";
 
 export interface TimelineWindow {
   from: string;
@@ -31,6 +34,7 @@ export interface TimelineDataSource {
   fetchEvents(query: TimelineDataQuery): Promise<EventEnvelope[]>;
   fetchArrows(window: TimelineWindow): Promise<Arrow[]>;
   fetchSlackThread(channelId: string, threadTs: string): Promise<SlackThreadResponse>;
+  fetchLinearIssue(issueRef: string): Promise<LinearIssueResponse>;
 }
 
 export type ThreadEntry = SlackThreadEntry | LinearThreadEntry;
@@ -48,7 +52,7 @@ export interface ThreadPanelProps<TEntry extends ThreadEntry> {
 export interface ThreadAdapter<TEntry extends ThreadEntry = ThreadEntry> {
   readonly kind: TEntry["type"];
   readonly domains: string[];
-  buildEntries(events: EventEnvelope[]): TEntry[];
+  buildEntries(events: EventEnvelope[]): TEntry[] | Promise<TEntry[]>;
   hydrate?(entry: TEntry, dataSource: TimelineDataSource): Promise<TEntry>;
   matches(entry: ThreadEntry): entry is TEntry;
   Panel: ComponentType<ThreadPanelProps<TEntry>>;

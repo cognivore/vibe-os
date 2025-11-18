@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -5,6 +6,7 @@ use anyhow::{Context, Result};
 use core_model::event::EventEnvelope;
 use core_model::time::TimeWindow;
 use core_types::Domain;
+use serde_json::Value as JsonValue;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{AllQuery, BooleanQuery, Occur, Query, QueryParser, RangeQuery, TermQuery};
@@ -54,6 +56,7 @@ pub struct SearchHit {
     #[allow(dead_code)]
     pub score: f32,
     pub event: EventEnvelope,
+    pub thread_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,25 +134,37 @@ impl SearchService {
     pub fn search(&self, request: SearchRequest) -> Result<SearchResult> {
         let query = self.build_query(&request)?;
         let searcher = self.inner.reader.searcher();
-        let limit = request.limit.clamp(1, MAX_LIMIT);
-        let offset = request.offset;
+        // Fetch more results to properly sort by thread
+        let fetch_limit = (request.limit + request.offset).clamp(1, MAX_LIMIT * 2);
         let (top_docs, total) = searcher
-            .search(
-                query.as_ref(),
-                &(TopDocs::with_limit(limit).and_offset(offset), Count),
-            )
+            .search(query.as_ref(), &(TopDocs::with_limit(fetch_limit), Count))
             .context("failed to run search query")?;
 
-        let mut hits = Vec::with_capacity(top_docs.len());
+        let mut raw_hits = Vec::with_capacity(top_docs.len());
         for (score, doc_address) in top_docs {
             let doc = searcher
                 .doc(doc_address)
                 .context("failed to load search hit document")?;
             let event = self.deserialize_event(&doc)?;
-            hits.push(SearchHit { score, event });
+            raw_hits.push(SearchHit {
+                score,
+                event,
+                thread_name: None,
+            });
         }
 
-        Ok(SearchResult { total, hits })
+        // Annotate thread metadata and sort by thread recency
+        let hits = sort_and_label_threads(raw_hits);
+
+        // Apply pagination after thread sorting
+        let start = request.offset.min(hits.len());
+        let end = (request.offset + request.limit).min(hits.len());
+        let paged_hits = hits[start..end].to_vec();
+
+        Ok(SearchResult {
+            total,
+            hits: paged_hits,
+        })
     }
 
     fn add_documents(&self, writer: &mut IndexWriter, events: Vec<EventEnvelope>) -> Result<()> {
@@ -223,5 +238,171 @@ impl SearchService {
             .to_vec();
         serde_json::from_slice::<EventEnvelope>(&bytes)
             .context("failed to deserialize search hit payload")
+    }
+}
+
+fn sort_and_label_threads(hits: Vec<SearchHit>) -> Vec<SearchHit> {
+    if hits.is_empty() {
+        return hits;
+    }
+
+    let mut thread_groups: HashMap<String, Vec<SearchHit>> = HashMap::new();
+
+    for hit in hits {
+        let thread_key = thread_identifier(&hit.event);
+        thread_groups.entry(thread_key).or_default().push(hit);
+    }
+
+    let mut thread_latest: Vec<(String, chrono::DateTime<chrono::Utc>)> = thread_groups
+        .iter()
+        .map(|(thread_key, thread_hits)| {
+            let latest = thread_hits
+                .iter()
+                .map(|hit| hit.event.at)
+                .max()
+                .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
+            (thread_key.clone(), latest)
+        })
+        .collect();
+
+    thread_latest.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut sorted_hits = Vec::new();
+    for (thread_key, _) in thread_latest {
+        if let Some(mut thread_hits) = thread_groups.remove(&thread_key) {
+            // Ensure chronological ordering to determine root message
+            thread_hits.sort_by(|a, b| a.event.at.cmp(&b.event.at));
+            let thread_name = compute_thread_name(&thread_hits);
+            if let Some(name) = &thread_name {
+                for hit in thread_hits.iter_mut() {
+                    hit.thread_name = Some(name.clone());
+                }
+            }
+            // Present hits newest-first within each thread
+            thread_hits.sort_by(|a, b| b.event.at.cmp(&a.event.at));
+            sorted_hits.extend(thread_hits);
+        }
+    }
+
+    sorted_hits
+}
+
+fn thread_identifier(event: &EventEnvelope) -> String {
+    event.entity_id.clone().unwrap_or_else(|| event.id.clone())
+}
+
+fn compute_thread_name(thread_hits: &[SearchHit]) -> Option<String> {
+    let first = thread_hits.first()?;
+    match first.event.domain {
+        Domain::Slack if is_slack_thread(&first.event) => {
+            // For Slack threads, entity_id format is "channel_id:thread_ts"
+            // The thread_ts is the timestamp of the ROOT message
+            let entity_id = first.event.entity_id.as_ref()?;
+            let thread_ts = entity_id.split(':').nth(1)?;
+
+            // Find the root message by matching ts field with thread_ts
+            for hit in thread_hits.iter() {
+                if let Some(text) = slack_root_message_text(&hit.event, thread_ts) {
+                    return Some(text);
+                }
+            }
+
+            // Fallback: use the earliest message's text
+            thread_hits
+                .iter()
+                .min_by(|a, b| a.event.at.cmp(&b.event.at))
+                .and_then(|hit| slack_message_text(&hit.event))
+        }
+        Domain::Linear => {
+            let title = thread_hits
+                .iter()
+                .find_map(|hit| linear_issue_label(&hit.event));
+            if let Some(label) = title {
+                Some(label)
+            } else {
+                thread_hits
+                    .iter()
+                    .min_by(|a, b| a.event.at.cmp(&b.event.at))
+                    .map(|hit| hit.event.summary.clone())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_slack_thread(event: &EventEnvelope) -> bool {
+    matches!(event.domain, Domain::Slack)
+        && event
+            .entity_id
+            .as_ref()
+            .map(|id| id.contains(':'))
+            .unwrap_or(false)
+}
+
+fn slack_root_message_text(event: &EventEnvelope, thread_ts: &str) -> Option<String> {
+    // Check if this event's ts matches the thread_ts (making it the root message)
+    match &event.data {
+        JsonValue::Object(map) => {
+            let ts = map.get("ts")?.as_str()?;
+            // Normalize comparison - thread_ts might have underscores instead of dots
+            let normalized_thread_ts = thread_ts.replace('_', ".");
+            if ts == normalized_thread_ts || ts.replace('.', "_") == thread_ts {
+                // This is the root message, extract its text
+                map.get("text")
+                    .and_then(|value| value.as_str())
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn slack_message_text(event: &EventEnvelope) -> Option<String> {
+    match &event.data {
+        JsonValue::Object(map) => map
+            .get("text")
+            .and_then(|value| value.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
+        _ => None,
+    }
+    .or_else(|| {
+        let summary = event.summary.trim();
+        if summary.is_empty() {
+            None
+        } else {
+            Some(summary.to_string())
+        }
+    })
+}
+
+fn linear_issue_label(event: &EventEnvelope) -> Option<String> {
+    match &event.data {
+        JsonValue::Object(map) => {
+            if let Some(JsonValue::String(title)) =
+                map.get("issue_title").filter(|value| value.is_string())
+            {
+                let trimmed = title.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            if let Some(JsonValue::String(identifier)) = map
+                .get("issue_identifier")
+                .filter(|value| value.is_string())
+            {
+                let trimmed = identifier.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }

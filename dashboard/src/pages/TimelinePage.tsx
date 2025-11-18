@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { Button } from "../components/ui/button";
@@ -21,6 +21,7 @@ import { linearThreadAdapter } from "./timeline/threads/linearThreadAdapter";
 import { threadKey } from "./timeline/threadUtils";
 
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ss";
+const SEARCH_DEBOUNCE_MS = 700;
 
 export default function TimelinePage() {
   const navigate = useNavigate();
@@ -28,6 +29,10 @@ export default function TimelinePage() {
   const threadAdapters = useMemo<ThreadAdapterRegistry>(
     () => [slackThreadAdapter, linearThreadAdapter],
     [],
+  );
+  const consumedThreadDomains = useMemo(
+    () => new Set(threadAdapters.flatMap((adapter) => adapter.domains)),
+    [threadAdapters],
   );
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -44,33 +49,136 @@ export default function TimelinePage() {
   });
 
   const searchState = useTimelineSearch();
+  const { search: performSearch, clear: clearSearch } = searchState;
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const buildSearchParams = useCallback(
+    (queryText: string) => ({
+      query: queryText,
+      domains: domainState.selectedDomains,
+      from: window.from,
+      to: window.to,
+    }),
+    [domainState.selectedDomains, window.from, window.to],
+  );
+
+  const runSearch = useCallback(
+    (queryText: string) => {
+      const trimmed = queryText.trim();
+      if (!trimmed) {
+        clearSearch();
+        return;
+      }
+      const params = buildSearchParams(trimmed);
+      if (!params.domains.length) {
+        return;
+      }
+      performSearch(params);
+    },
+    [buildSearchParams, clearSearch, performSearch],
+  );
+
+  useEffect(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      clearSearch();
+      return;
+    }
+
+    const params = buildSearchParams(trimmed);
+    if (!params.domains.length) {
+      return;
+    }
+
+    debounceRef.current = setTimeout(() => {
+      performSearch(params);
+      debounceRef.current = null;
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+    };
+  }, [searchQuery, buildSearchParams, clearSearch, performSearch]);
 
   const handleSearch = () => {
-    if (searchQuery.trim()) {
-      searchState.search({
-        query: searchQuery,
-        domains: domainState.selectedDomains,
-        from: window.from,
-        to: window.to,
-      });
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
     }
+    runSearch(searchQuery);
   };
 
   const handleClearSearch = () => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
     setSearchQuery("");
-    searchState.clear();
+    clearSearch();
   };
 
-  const isSearchMode = searchState.results.length > 0 || (searchQuery.trim().length > 0 && !searchState.loading);
-  const displayEntries: TimelineEntry[] = isSearchMode
-    ? searchState.results.map((event) => ({
+  const [searchThreadEntries, setSearchThreadEntries] = useState<ThreadEntry[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!searchState.results.length) {
+      setSearchThreadEntries([]);
+      return;
+    }
+
+    const buildThreads = async () => {
+      const results = await Promise.all(
+        threadAdapters.map(async (adapter) => {
+          const entries = adapter.buildEntries(searchState.results);
+          return entries instanceof Promise ? await entries : entries;
+        })
+      );
+
+      if (!cancelled) {
+        setSearchThreadEntries(results.flat());
+      }
+    };
+
+    buildThreads();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [searchState.results, threadAdapters]);
+
+  const searchEventEntries = useMemo<TimelineEntry[]>(() => {
+    if (!searchState.results.length) return [];
+    return searchState.results
+      .filter((event) => !consumedThreadDomains.has(event.domain))
+      .map((event) => ({
         type: "event" as const,
         at: event.at,
         event,
-      }))
-    : timelineState.entries;
+      }));
+  }, [searchState.results, consumedThreadDomains]);
 
-  const displayThreadEntries = isSearchMode ? [] : timelineState.threadEntries;
+  const searchEntries = useMemo<TimelineEntry[]>(
+    () =>
+      [...searchEventEntries, ...searchThreadEntries].sort(
+        (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
+      ),
+    [searchEventEntries, searchThreadEntries],
+  );
+
+  const hasSearchQuery = searchQuery.trim().length > 0;
+  const isSearchMode = hasSearchQuery || searchState.loading;
+  const displayEntries: TimelineEntry[] = isSearchMode ? searchEntries : timelineState.entries;
+
+  const displayThreadEntries = isSearchMode ? searchThreadEntries : timelineState.threadEntries;
 
   const threadState = useThreadSelection({
     adapters: threadAdapters,
@@ -219,6 +327,7 @@ export default function TimelinePage() {
               onPersonaClick={handlePersonaClick}
               onThreadSelect={threadState.selectThread}
               activeThreadKey={activeThreadKey}
+              isSearchMode={isSearchMode}
             />
           )}
         </ScrollArea>

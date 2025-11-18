@@ -24,6 +24,7 @@ pub struct AppState {
     pub(crate) slack_mirror_dir: Arc<PathBuf>,
     pub(crate) linear_mirror_dir: Arc<PathBuf>,
     pub(crate) slack_token: Option<Arc<String>>,
+    pub(crate) linear_api_key: Option<Arc<String>>,
     pub(crate) search: SearchService,
 }
 
@@ -44,5 +45,6 @@ pub struct DashboardServerSettings {
     pub bind: SocketAddr,
     pub static_dir: Option<PathBuf>,
     pub slack_token: Option<String>,
+    pub linear_api_key: Option<String>,
     pub search_index_dir: PathBuf,
 }

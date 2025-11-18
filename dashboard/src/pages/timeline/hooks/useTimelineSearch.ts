@@ -1,9 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
-import { searchTimeline, type SearchQuery } from "../../../api/client";
+import { searchTimeline, type SearchQuery, type SearchHit } from "../../../api/client";
 import type { EventEnvelope } from "../../../types/core";
 
+export interface EventEnvelopeWithThread extends EventEnvelope {
+  thread_name?: string | null;
+}
+
 export interface TimelineSearchState {
-  results: EventEnvelope[];
+  results: EventEnvelopeWithThread[];
   total: number;
   loading: boolean;
   error: string | null;
@@ -15,7 +19,7 @@ export interface UseTimelineSearchResult extends TimelineSearchState {
 }
 
 export function useTimelineSearch(): UseTimelineSearchResult {
-  const [results, setResults] = useState<EventEnvelope[]>([]);
+  const [results, setResults] = useState<EventEnvelopeWithThread[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +33,7 @@ export function useTimelineSearch(): UseTimelineSearchResult {
     setResults([]);
     setTotal(0);
     setError(null);
+    setLoading(false);
     setCurrentQuery(null);
   }, []);
 
@@ -44,7 +49,12 @@ export function useTimelineSearch(): UseTimelineSearchResult {
     searchTimeline(currentQuery)
       .then((response) => {
         if (cancelled) return;
-        setResults(response.events);
+        // Enrich events with thread_name from search hits
+        const enrichedEvents = response.hits.map((hit: SearchHit) => ({
+          ...hit.event,
+          thread_name: hit.thread_name,
+        }));
+        setResults(enrichedEvents);
         setTotal(response.total);
       })
       .catch((err) => {

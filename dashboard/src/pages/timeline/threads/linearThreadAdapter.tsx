@@ -1,16 +1,23 @@
 import { useMemo } from "react";
 import { Button } from "../../../components/ui/button";
+import { ActorChip } from "../../../components/timeline/entries/ActorChip";
+import { LinearEventBody } from "../../../components/timeline/entries/EventEntry";
 import type {
   LinearEventData,
   LinearThreadEntry,
 } from "../../../components/timeline/types";
 import type { EventEnvelope, Identity, Persona } from "../../../types/core";
-import type { ThreadAdapter, ThreadPanelProps } from "../adapters";
+import type {
+  ThreadAdapter,
+  ThreadPanelProps,
+  TimelineDataSource,
+} from "../adapters";
 
 export const linearThreadAdapter: ThreadAdapter<LinearThreadEntry> = {
   kind: "linear_thread",
   domains: ["linear"],
   buildEntries: buildLinearThreadEntries,
+  hydrate: hydrateLinearThread,
   matches: (entry): entry is LinearThreadEntry => entry.type === "linear_thread",
   Panel: LinearThreadPanel,
 };
@@ -90,13 +97,32 @@ function LinearThreadPanel({
   personaLookup,
   onPersonaClick,
   onClose,
+  loading,
+  error,
 }: ThreadPanelProps<LinearThreadEntry>) {
   const comments = useMemo(
     () =>
       [...thread.comments].sort(
         (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),
       ),
-    [thread],
+    [thread.comments],
+  );
+  const events = useMemo(
+    () =>
+      [...thread.events].sort(
+        (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),
+      ),
+    [thread.events],
+  );
+  const timeline = useMemo(
+    () =>
+      [
+        ...events.map((event) => ({ kind: "event" as const, event })),
+        ...comments.map((event) => ({ kind: "comment" as const, event })),
+      ].sort(
+        (a, b) => new Date(a.event.at).getTime() - new Date(b.event.at).getTime(),
+      ),
+    [comments, events],
   );
   const issueTitle =
     thread.issueTitle ?? thread.issueIdentifier ?? "Linear issue";
@@ -124,7 +150,7 @@ function LinearThreadPanel({
             </p>
           ) : null}
           <p className="text-xs text-muted-foreground">
-            {comments.length} comment{comments.length === 1 ? "" : "s"}
+            {timeline.length} activity item{timeline.length === 1 ? "" : "s"}
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={onClose}>
@@ -136,19 +162,38 @@ function LinearThreadPanel({
           {thread.issueDescription}
         </p>
       ) : null}
+      {loading ? (
+        <p className="text-xs text-muted-foreground">
+          Refreshing latest issue activity…
+        </p>
+      ) : null}
+      {error ? (
+        <p className="text-xs text-destructive-foreground">{error}</p>
+      ) : null}
       <div className="flex-1 space-y-3 overflow-y-auto pr-2">
-        {comments.length ? (
-          comments.map((comment) => (
-            <LinearCommentMessage
-              key={comment.id}
-              event={comment}
-              identityLookup={identityLookup}
-              personaLookup={personaLookup}
-            />
-          ))
+        {timeline.length ? (
+          timeline.map((item) =>
+            item.kind === "comment" ? (
+              <LinearCommentMessage
+                key={item.event.id}
+                event={item.event}
+                identityLookup={identityLookup}
+                personaLookup={personaLookup}
+                onPersonaClick={onPersonaClick}
+              />
+            ) : (
+              <LinearEventUpdate
+                key={item.event.id}
+                event={item.event}
+                identityLookup={identityLookup}
+                personaLookup={personaLookup}
+                onPersonaClick={onPersonaClick}
+              />
+            ),
+          )
         ) : (
           <div className="text-sm text-muted-foreground">
-            No comments yet. Check back after teammates respond.
+            No historical activity available for this issue.
           </div>
         )}
       </div>
@@ -160,10 +205,12 @@ function LinearCommentMessage({
   event,
   identityLookup,
   personaLookup,
+  onPersonaClick,
 }: {
   event: EventEnvelope;
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  onPersonaClick?: ThreadPanelProps<LinearThreadEntry>["onPersonaClick"];
 }) {
   const actorLabel = resolveLinearActor(event, identityLookup, personaLookup);
   const commentBody = getLinearCommentBody(event);
@@ -185,6 +232,47 @@ function LinearCommentMessage({
           Open in Linear
         </a>
       ) : null}
+      <div className="mt-2">
+        <ActorChip
+          event={event}
+          identities={identityLookup}
+          personas={personaLookup}
+          onPersonaClick={onPersonaClick}
+        />
+      </div>
+    </div>
+  );
+}
+
+function LinearEventUpdate({
+  event,
+  identityLookup,
+  personaLookup,
+  onPersonaClick,
+}: {
+  event: EventEnvelope;
+  identityLookup: Record<string, Identity>;
+  personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  onPersonaClick: ThreadPanelProps<LinearThreadEntry>["onPersonaClick"];
+}) {
+  const actorLabel = resolveLinearActor(event, identityLookup, personaLookup);
+  return (
+    <div className="rounded-lg border border-border bg-background/80 p-3 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+        <div className="font-medium">{actorLabel}</div>
+        <p>{new Date(event.at).toLocaleString()}</p>
+      </div>
+      <div className="mt-2 text-sm text-foreground">
+        <LinearEventBody event={event} />
+      </div>
+      <div className="mt-2">
+        <ActorChip
+          event={event}
+          identities={identityLookup}
+          personas={personaLookup}
+          onPersonaClick={onPersonaClick}
+        />
+      </div>
     </div>
   );
 }
@@ -237,5 +325,33 @@ function getLinearCommentBody(event: EventEnvelope) {
     return data.issue_description.trim();
   }
   return event.summary ?? "";
+}
+
+async function hydrateLinearThread(
+  entry: LinearThreadEntry,
+  dataSource: TimelineDataSource,
+): Promise<LinearThreadEntry> {
+  const response = await dataSource.fetchLinearIssue(entry.issueId);
+  const comments = [...response.comments].sort(
+    (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),
+  );
+  const events = [...response.events].sort(
+    (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),
+  );
+  const latest =
+    [...comments, ...events].sort(
+      (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
+    )[0]?.at ?? entry.at;
+
+  return {
+    ...entry,
+    issueIdentifier: response.issue_identifier ?? entry.issueIdentifier,
+    issueTitle: response.issue_title ?? entry.issueTitle,
+    issueUrl: response.issue_url ?? entry.issueUrl,
+    issueDescription: response.issue_description ?? entry.issueDescription,
+    comments,
+    events,
+    at: latest,
+  };
 }
 

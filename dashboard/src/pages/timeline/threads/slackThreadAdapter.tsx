@@ -1,8 +1,10 @@
 import { useMemo } from "react";
 import { Button } from "../../../components/ui/button";
+import { getThreadTitles } from "../../../api/client";
 import {
   SlackEventBody,
   SlackMessageLinks,
+  normalizeSlackMarkup,
 } from "../../../components/timeline/entries/EventEntry";
 import type {
   PersonaClickTarget,
@@ -26,7 +28,7 @@ export const slackThreadAdapter: ThreadAdapter<SlackThreadEntry> = {
   Panel: SlackThreadPanel,
 };
 
-function buildSlackThreadEntries(events: EventEnvelope[]): SlackThreadEntry[] {
+async function buildSlackThreadEntries(events: EventEnvelope[]): Promise<SlackThreadEntry[]> {
   const map = new Map<string, { channelId?: string; messages: EventEnvelope[] }>();
   events
     .filter((event) => event.domain === "slack")
@@ -51,7 +53,7 @@ function buildSlackThreadEntries(events: EventEnvelope[]): SlackThreadEntry[] {
       map.get(threadKey)!.messages.push(event);
     });
 
-  return Array.from(map.entries())
+  const entries = Array.from(map.entries())
     .filter(([, { messages }]) => messages.length > 0)
     .map(([threadId, { channelId, messages }]) => {
       const sorted = [...messages].sort(
@@ -79,6 +81,23 @@ function buildSlackThreadEntries(events: EventEnvelope[]): SlackThreadEntry[] {
         at: latestAt,
       };
     });
+
+  // Fetch thread titles from backend in batch
+  const threadIds = entries.map((entry) => entry.threadId);
+  let titles: Record<string, string> = {};
+  if (threadIds.length > 0) {
+    try {
+      titles = await getThreadTitles(threadIds);
+    } catch (error) {
+      console.error("Failed to fetch thread titles:", error);
+    }
+  }
+
+  // Apply titles to entries
+  return entries.map((entry) => ({
+    ...entry,
+    threadTitle: titles[entry.threadId],
+  }));
 }
 
 async function hydrateSlackThread(
@@ -125,12 +144,17 @@ function SlackThreadPanel({
   const hasMoreMessages =
     totalReplyCount !== null && thread.replies.length < totalReplyCount;
 
+  // Use fetched thread title, fallback to channel ID
+  const threadTitle = thread.threadTitle
+    ? normalizeSlackMarkup(thread.threadTitle)
+    : (thread.channelId ? `#${thread.channelId}` : "thread");
+
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-sm font-semibold">
-            Slack thread {thread.channelId ? `· #${thread.channelId}` : ""}
+            Slack thread · {threadTitle}
           </p>
           <p className="text-xs text-muted-foreground">
             {messages.length} message{messages.length === 1 ? "" : "s"}

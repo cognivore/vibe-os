@@ -19,6 +19,7 @@ interface TimelineEntryListProps {
   onPersonaClick?: (target: PersonaClickTarget) => void;
   onThreadSelect?: (thread: SlackThreadEntry | LinearThreadEntry) => void;
   activeThreadKey?: string;
+  isSearchMode?: boolean;
 }
 
 export function TimelineEntryList({
@@ -29,6 +30,7 @@ export function TimelineEntryList({
   onPersonaClick,
   onThreadSelect,
   activeThreadKey,
+  isSearchMode = false,
 }: TimelineEntryListProps) {
   return (
     <ul className="divide-y divide-border">
@@ -56,6 +58,7 @@ export function TimelineEntryList({
               onPersonaClick={onPersonaClick}
               onThreadSelect={onThreadSelect}
               isActive={activeThreadKey === `slack:${entry.threadId}`}
+              isSearchMode={isSearchMode}
             />
           );
         }

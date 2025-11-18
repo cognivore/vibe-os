@@ -92,8 +92,29 @@ export function useTimelineData({
     };
   }, [dataSource, selectedDomains, window]);
 
-  const threadEntries = useMemo<ThreadEntry[]>(() => {
-    return threadAdapters.flatMap((adapter) => adapter.buildEntries(events));
+  const [threadEntries, setThreadEntries] = useState<ThreadEntry[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const buildThreads = async () => {
+      const results = await Promise.all(
+        threadAdapters.map(async (adapter) => {
+          const entries = adapter.buildEntries(events);
+          return entries instanceof Promise ? await entries : entries;
+        })
+      );
+
+      if (!cancelled) {
+        setThreadEntries(results.flat());
+      }
+    };
+
+    buildThreads();
+
+    return () => {
+      cancelled = true;
+    };
   }, [events, threadAdapters]);
 
   const entries = useMemo<TimelineEntry[]>(() => {

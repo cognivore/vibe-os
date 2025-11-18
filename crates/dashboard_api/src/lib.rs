@@ -51,6 +51,10 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         info!("Slack token detected; enabling on-demand Slack thread fetch");
         Arc::new(token)
     });
+    let linear_api_key = settings.linear_api_key.clone().map(|key| {
+        info!("Linear API key detected; enabling Linear background sync");
+        Arc::new(key)
+    });
 
     let state = AppState {
         adapters: Arc::new(adapters),
@@ -61,6 +65,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         slack_mirror_dir: Arc::new(settings.slack_mirror_dir.clone()),
         linear_mirror_dir: Arc::new(settings.linear_mirror_dir.clone()),
         slack_token,
+        linear_api_key,
         search: search_service.clone(),
     };
 
@@ -69,8 +74,18 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
     // Start background Slack sync task if token available
     if let Some(token) = settings.slack_token {
         let mirror_dir = settings.slack_mirror_dir.clone();
+        let sync_state = state.clone();
         tokio::spawn(async move {
-            background_slack_sync(token, mirror_dir).await;
+            background_slack_sync(token, mirror_dir, sync_state).await;
+        });
+    }
+
+    // Start background Linear sync task if API key available
+    if let Some(api_key) = settings.linear_api_key {
+        let mirror_dir = settings.linear_mirror_dir.clone();
+        let sync_state = state.clone();
+        tokio::spawn(async move {
+            background_linear_sync(api_key, mirror_dir, sync_state).await;
         });
     }
 
@@ -106,7 +121,7 @@ async fn handler_not_found() -> impl IntoResponse {
     (StatusCode::NOT_FOUND, "Not found")
 }
 
-async fn background_slack_sync(token: String, mirror_dir: PathBuf) {
+async fn background_slack_sync(token: String, mirror_dir: PathBuf, state: AppState) {
     info!("Starting background Slack sync (every 60 seconds)");
 
     loop {
@@ -114,7 +129,14 @@ async fn background_slack_sync(token: String, mirror_dir: PathBuf) {
 
         info!("Running background Slack sync...");
         match run_slack_sync(&token, &mirror_dir).await {
-            Ok(()) => info!("Background Slack sync completed successfully"),
+            Ok(()) => {
+                info!("Background Slack sync completed successfully");
+                // Trigger immediate reindex after successful sync
+                match search::rebuild_full_index(&state).await {
+                    Ok(count) => info!(count, "Search index rebuilt after Slack sync"),
+                    Err(e) => error!("Failed to rebuild search index after Slack sync: {}", e),
+                }
+            }
             Err(e) => error!("Background Slack sync failed: {}", e),
         }
     }
@@ -138,6 +160,51 @@ async fn run_slack_sync(token: &str, mirror_dir: &Path) -> Result<()> {
 
     if !status.success() {
         anyhow::bail!("Slack mirror sync exited with status: {}", status);
+    }
+
+    Ok(())
+}
+
+async fn background_linear_sync(api_key: String, mirror_dir: PathBuf, state: AppState) {
+    info!("Starting background Linear sync (every 60 seconds)");
+
+    loop {
+        sleep(Duration::from_secs(60)).await;
+
+        info!("Running background Linear sync...");
+        match run_linear_sync(&api_key, &mirror_dir).await {
+            Ok(()) => {
+                info!("Background Linear sync completed successfully");
+                match search::rebuild_full_index(&state).await {
+                    Ok(count) => info!(count, "Search index rebuilt after Linear sync"),
+                    Err(e) => error!("Failed to rebuild search index after Linear sync: {}", e),
+                }
+            }
+            Err(e) => error!("Background Linear sync failed: {}", e),
+        }
+    }
+}
+
+async fn run_linear_sync(api_key: &str, mirror_dir: &Path) -> Result<()> {
+    info!("Syncing Linear mirror at {}", mirror_dir.display());
+
+    use tokio::process::Command;
+    let vibeos_path = std::env::current_dir()?.join("target/debug/vibeos");
+
+    let mirror_str = mirror_dir.display().to_string();
+    let status = Command::new(&vibeos_path)
+        .arg("linear")
+        .arg("sync")
+        .arg("--output-dir")
+        .arg(&mirror_str)
+        .env("VIBEOS_LINEAR_API_KEY", api_key)
+        .env("LINEAR_MIRROR_DIR", &mirror_str)
+        .env("VIBEOS_LINEAR_MIRROR_DIR", &mirror_str)
+        .status()
+        .await?;
+
+    if !status.success() {
+        anyhow::bail!("Linear mirror sync exited with status: {}", status);
     }
 
     Ok(())

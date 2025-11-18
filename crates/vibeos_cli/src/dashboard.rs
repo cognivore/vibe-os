@@ -20,6 +20,7 @@ pub async fn serve(cfg: &Config) -> Result<()> {
         bind,
         static_dir: cfg.dashboard_static_dir.clone(),
         slack_token: Some(cfg.slack_token.clone()),
+        linear_api_key: Some(cfg.linear_api_key.clone()),
     };
 
     run_dashboard_server(settings).await

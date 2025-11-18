@@ -7,6 +7,7 @@ use crate::state::AppState;
 mod arrows;
 mod events;
 mod identities;
+mod linear;
 mod operators;
 mod search;
 mod slack;
@@ -21,6 +22,8 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/arrows", get(arrows::list_arrows))
         .route("/search", get(search::execute_search))
         .route("/search/reindex", post(search::reindex))
+        .route("/search/thread-titles", post(search::get_thread_titles))
+        .route("/linear/issues/:issue_ref", get(linear::get_linear_issue))
         .route(
             "/slack/threads/:channel/:thread_ts",
             get(slack::get_slack_thread),

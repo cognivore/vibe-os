@@ -119,13 +119,17 @@ pub fn map_comment_record(
         domain: Domain::Linear,
         local_id: id.clone(),
     });
+    let issue_reference = record
+        .issue_identifier
+        .clone()
+        .unwrap_or_else(|| record.issue_id.clone());
     EventEnvelope {
         id: format!("linear_comment:{}", record.id),
         domain: Domain::Linear,
         at: record.updated_at,
         kind: "linear.comment".into(),
         summary: record.body.chars().take(140).collect(),
-        entity_id: Some(record.issue_id.clone()),
+        entity_id: Some(issue_reference),
         data: Value::Object(data_map),
         actor_persona_key: persona_key,
         actor_persona_id: None,

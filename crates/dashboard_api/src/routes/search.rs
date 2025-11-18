@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+
 use axum::extract::{Query, State};
 use axum::Json;
 use core_model::event::EventEnvelope;
+use core_types::Domain;
+use domain_adapters::SlackAdapter;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
@@ -21,7 +25,13 @@ pub struct SearchQuery {
 #[derive(Debug, Serialize)]
 pub struct SearchResponse {
     pub total: usize,
-    pub events: Vec<EventEnvelope>,
+    pub hits: Vec<SearchHitResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchHitResponse {
+    pub event: EventEnvelope,
+    pub thread_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,9 +54,12 @@ pub async fn execute_search(
     };
 
     let search = state.search.clone();
-    let result = tokio::task::spawn_blocking(move || search.search(request))
+    let mut result = tokio::task::spawn_blocking(move || search.search(request))
         .await
         .map_err(AppError::from)??;
+
+    // Enrich Slack thread results with root message text
+    enrich_slack_thread_names(&mut result, &state).await;
 
     Ok(Json(result.into()))
 }
@@ -60,7 +73,126 @@ impl From<SearchResult> for SearchResponse {
     fn from(value: SearchResult) -> Self {
         Self {
             total: value.total,
-        events: value.hits.into_iter().map(|hit| hit.event).collect(),
+            hits: value
+                .hits
+                .into_iter()
+                .map(|hit| SearchHitResponse {
+                    event: hit.event,
+                    thread_name: hit.thread_name,
+                })
+                .collect(),
         }
     }
+}
+
+async fn enrich_slack_thread_names(result: &mut SearchResult, state: &AppState) {
+    // Group hits by thread entity_id
+    let mut thread_groups: HashMap<String, Vec<usize>> = HashMap::new();
+
+    for (idx, hit) in result.hits.iter().enumerate() {
+        if hit.event.domain == Domain::Slack {
+            if let Some(entity_id) = &hit.event.entity_id {
+                if entity_id.contains(':') {
+                    // This is a thread
+                    thread_groups
+                        .entry(entity_id.clone())
+                        .or_default()
+                        .push(idx);
+                }
+            }
+        }
+    }
+
+    // For each thread, try to load the root message
+    let adapter = SlackAdapter::new(state.slack_mirror_dir.as_ref());
+
+    for (entity_id, indices) in thread_groups {
+        // Parse entity_id: "channel_id:thread_ts"
+        let parts: Vec<&str> = entity_id.split(':').collect();
+        if parts.len() != 2 {
+            continue;
+        }
+        let channel_id = parts[0];
+        let thread_ts = parts[1].replace('_', ".");
+
+        // Load the thread from the adapter
+        match adapter.load_thread(channel_id, &thread_ts) {
+            Ok(events) => {
+                // Find the root message (ts == thread_ts)
+                if let Some(root_text) = find_root_message_text(&events, &thread_ts) {
+                    // Apply this text to all hits in this thread
+                    for &idx in &indices {
+                        if let Some(hit) = result.hits.get_mut(idx) {
+                            hit.thread_name = Some(root_text.clone());
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Failed to load thread {} for enrichment: {}", entity_id, e);
+            }
+        }
+    }
+}
+
+fn find_root_message_text(events: &[EventEnvelope], thread_ts: &str) -> Option<String> {
+    for event in events {
+        if let Some(data) = event.data.as_object() {
+            if let Some(ts) = data.get("ts").and_then(|v| v.as_str()) {
+                if ts == thread_ts {
+                    // This is the root message
+                    return data
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ThreadTitlesRequest {
+    pub thread_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ThreadTitlesResponse {
+    pub titles: HashMap<String, String>,
+}
+
+pub async fn get_thread_titles(
+    State(state): State<AppState>,
+    Json(request): Json<ThreadTitlesRequest>,
+) -> Result<Json<ThreadTitlesResponse>, AppError> {
+    let mut titles = HashMap::new();
+    let adapter = SlackAdapter::new(state.slack_mirror_dir.as_ref());
+
+    for thread_id in request.thread_ids {
+        // Parse thread_id: "channel_id:thread_ts"
+        let parts: Vec<&str> = thread_id.split(':').collect();
+        if parts.len() != 2 {
+            continue;
+        }
+        let channel_id = parts[0];
+        let thread_ts = parts[1].replace('_', ".");
+
+        // Load thread from Slack mirror
+        match adapter.load_thread(channel_id, &thread_ts) {
+            Ok(events) => {
+                // Find root message where ts == thread_ts
+                if let Some(root_text) = find_root_message_text(&events, &thread_ts) {
+                    titles.insert(thread_id, root_text);
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Failed to load thread {} for title: {}", thread_id, e);
+            }
+        }
+    }
+
+    Ok(Json(ThreadTitlesResponse { titles }))
 }

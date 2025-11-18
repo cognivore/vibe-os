@@ -2,6 +2,7 @@ import {
   getArrows,
   getDomains,
   getEvents,
+  getLinearIssue,
   getSlackThread,
   listIdentities,
 } from "../../api/client";
@@ -29,6 +30,7 @@ export function createTimelineApiDataSource(): TimelineDataSource {
       }),
     fetchSlackThread: (channelId: string, threadTs: string) =>
       getSlackThread(channelId, threadTs),
+    fetchLinearIssue: (issueRef: string) => getLinearIssue(issueRef),
   };
 }
 

@@ -326,7 +326,10 @@ what: |
 
         let result = parse_easy_send_input(yaml);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Missing 'where' field"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing 'where' field"));
     }
 
     #[test]

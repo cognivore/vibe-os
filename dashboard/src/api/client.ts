@@ -230,6 +230,22 @@ export async function getSlackThread(
   );
 }
 
+export interface LinearIssueResponse {
+  issue_id: string;
+  issue_identifier?: string | null;
+  issue_title?: string | null;
+  issue_url?: string | null;
+  issue_description?: string | null;
+  events: EventEnvelope[];
+  comments: EventEnvelope[];
+}
+
+export async function getLinearIssue(
+  issueRef: string,
+): Promise<LinearIssueResponse> {
+  return request(`/api/linear/issues/${encodeURIComponent(issueRef)}`);
+}
+
 export interface SearchQuery {
   query: string;
   domains?: string[];
@@ -239,8 +255,13 @@ export interface SearchQuery {
   offset?: number;
 }
 
+export interface SearchHit {
+  event: EventEnvelope;
+  thread_name: string | null;
+}
+
 export interface SearchResponse {
-  events: EventEnvelope[];
+  hits: SearchHit[];
   total: number;
 }
 
@@ -271,5 +292,21 @@ export async function searchTimeline(params: SearchQuery): Promise<SearchRespons
 
 export async function reindexSearch(): Promise<void> {
   return request("/api/search/reindex", { method: "POST" });
+}
+
+export interface ThreadTitlesRequest {
+  thread_ids: string[];
+}
+
+export interface ThreadTitlesResponse {
+  titles: Record<string, string>;
+}
+
+export async function getThreadTitles(threadIds: string[]): Promise<Record<string, string>> {
+  const response = await request<ThreadTitlesResponse>("/api/search/thread-titles", {
+    method: "POST",
+    body: JSON.stringify({ thread_ids: threadIds }),
+  });
+  return response.titles;
 }
 

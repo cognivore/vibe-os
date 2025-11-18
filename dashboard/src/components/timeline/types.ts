@@ -8,6 +8,7 @@ export interface SlackThreadEntry {
   type: "slack_thread";
   threadId: string;
   channelId?: string;
+  threadTitle?: string;
   at: string;
   root: EventEnvelope;
   replies: EventEnvelope[];

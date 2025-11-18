@@ -8,6 +8,7 @@ import { ActorChip } from "./ActorChip";
 import {
   SlackEventBody,
   SlackMessageLinks,
+  normalizeSlackMarkup,
 } from "./EventEntry";
 import type {
   PersonaClickTarget,
@@ -22,6 +23,7 @@ interface SlackThreadPreviewProps {
   onPersonaClick?: (target: PersonaClickTarget) => void;
   onThreadSelect?: (thread: SlackThreadEntry) => void;
   isActive?: boolean;
+  isSearchMode?: boolean;
 }
 
 export function SlackThreadPreview({
@@ -32,14 +34,15 @@ export function SlackThreadPreview({
   onPersonaClick,
   onThreadSelect,
   isActive,
+  isSearchMode = false,
 }: SlackThreadPreviewProps) {
   const replyCount = entry.replies.length;
-  const channelLabel =
-    domainLookup["slack"] && entry.channelId
-      ? `${domainLookup["slack"]} · #${entry.channelId}`
-      : entry.channelId
-        ? `#${entry.channelId}`
-        : "Slack thread";
+
+  // Use fetched thread title, fallback to channel ID
+  const threadTitle = entry.threadTitle
+    ? normalizeSlackMarkup(entry.threadTitle)
+    : (entry.channelId ? `#${entry.channelId}` : "Slack thread");
+
   const latestTime = new Date(entry.at).toLocaleString();
   return (
     <li className={`p-4 ${isActive ? "bg-primary/10" : "bg-muted/10"}`}>
@@ -47,9 +50,9 @@ export function SlackThreadPreview({
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="secondary">Slack thread</Badge>
-            <p className="text-sm font-medium">{channelLabel}</p>
+            <p className="text-sm font-medium">{threadTitle}</p>
           </div>
-          <SlackEventBody event={entry.root} />
+          {isSearchMode && <SlackEventBody event={entry.root} />}
           <SlackMessageLinks event={entry.root} />
           <div className="text-xs text-muted-foreground">
             {replyCount > 0

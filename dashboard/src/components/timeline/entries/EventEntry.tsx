@@ -13,7 +13,7 @@ import type {
 import { ActorChip } from "./ActorChip";
 
 interface EventEntryProps {
-  event: EventEnvelope;
+  event: EventEnvelope & { thread_name?: string | null };
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
@@ -25,12 +25,19 @@ export function EventEntry({
   personaLookup,
   onPersonaClick,
 }: EventEntryProps) {
+  const threadName = (event as { thread_name?: string | null }).thread_name;
+
   return (
     <li className="p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="space-y-1">
           <Badge variant="secondary">{event.domain}</Badge>
           <p className="text-sm font-medium">{event.summary}</p>
+          {threadName && (
+            <p className="text-xs text-muted-foreground italic">
+              ↪ {threadName}
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">{event.kind}</p>
           {event.domain === "slack" ? (
             <div className="space-y-2">
@@ -174,7 +181,7 @@ function buildSlackLinkTargets(event: EventEnvelope): SlackLinkTargets | null {
   };
 }
 
-function LinearEventBody({ event }: { event: EventEnvelope }) {
+export function LinearEventBody({ event }: { event: EventEnvelope }) {
   const data = event.data as LinearEventData;
   const title =
     data.issue_title ??
@@ -262,7 +269,7 @@ export function extractLinearCommentSnippet(event: EventEnvelope) {
   return body ? body.slice(0, 160) : "Linear update";
 }
 
-function normalizeSlackMarkup(text: string) {
+export function normalizeSlackMarkup(text: string) {
   return text
     .replace(/<@([^>|]+)>/g, (_match, userId) => `@${userId}`)
     .replace(/<!([^>|]+)(?:\|([^>]+))?>/g, (_match, command, label) =>
