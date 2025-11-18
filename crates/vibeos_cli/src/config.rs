@@ -28,6 +28,8 @@ const DEFAULT_DASHBOARD_BIND: &str = "127.0.0.1:3000";
 const DASHBOARD_STATIC_DIR_VAR: &str = "VIBEOS_DASHBOARD_STATIC_DIR";
 const PERSONA_ROOT_DIR_VAR: &str = "PERSONA_ROOT_DIR";
 const DEFAULT_PERSONA_ROOT: &str = "./personas";
+const SEARCH_INDEX_DIR_VAR: &str = "VIBEOS_SEARCH_INDEX_DIR";
+const DEFAULT_SEARCH_INDEX_DIR: &str = "./search_index";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -40,6 +42,7 @@ pub struct Config {
     pub llm_model: Option<String>,
     pub llm_temperature: f32,
     pub arrow_store_dir: PathBuf,
+    pub search_index_dir: PathBuf,
     pub dashboard_bind: String,
     pub dashboard_static_dir: Option<PathBuf>,
     pub persona_root: PathBuf,
@@ -93,6 +96,10 @@ pub fn load_config() -> Result<Config> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_ARROW_STORE_DIR));
 
+    let search_index_dir = read_optional_env(SEARCH_INDEX_DIR_VAR, SEARCH_INDEX_DIR_VAR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SEARCH_INDEX_DIR));
+
     let dashboard_bind = read_optional_env(DASHBOARD_BIND_VAR, DASHBOARD_BIND_VAR)
         .unwrap_or_else(|| DEFAULT_DASHBOARD_BIND.to_string());
 
@@ -113,6 +120,7 @@ pub fn load_config() -> Result<Config> {
         llm_model,
         llm_temperature,
         arrow_store_dir,
+        search_index_dir,
         dashboard_bind,
         dashboard_static_dir,
         persona_root,

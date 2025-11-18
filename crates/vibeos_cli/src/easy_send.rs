@@ -185,7 +185,11 @@ pub fn match_team(team_key: &str, issues: &[LinearIssueSnapshot]) -> Result<Stri
 
     if matches.len() > 1 {
         let keys: Vec<String> = matches.iter().map(|(k, _)| k.to_string()).collect();
-        bail!("Ambiguous team '{}'. Matches: {}", team_key, keys.join(", "));
+        bail!(
+            "Ambiguous team '{}'. Matches: {}",
+            team_key,
+            keys.join(", ")
+        );
     }
 
     Ok(matches[0].1.to_string())
@@ -247,4 +251,3 @@ Bloodmoney API key and base URL are hard-coded in frontend code.
         assert!(result.what.contains("Move API_BASE_URL"));
     }
 }
-

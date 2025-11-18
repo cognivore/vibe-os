@@ -11,6 +11,7 @@ chrono = { workspace = true }
 core_model = { path = "../core_model" }
 core_operators = { path = "../core_operators" }
 core_persona = { path = "../core_persona" }
+core_types = { path = "../core_types" }
 domain_adapters = { path = "../domain_adapters" }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -20,3 +21,4 @@ tower-http = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
+tantivy = "0.22"

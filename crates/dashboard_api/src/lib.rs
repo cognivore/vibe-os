@@ -20,11 +20,13 @@ use tracing::{error, info, Level};
 
 mod error;
 mod routes;
+mod search;
 mod state;
 mod utils;
 
 pub use state::DashboardServerSettings;
 
+use search::{spawn_periodic_reindex, SearchService};
 use state::{AppState, MetaSnapshot};
 use utils::build_adapters;
 
@@ -33,6 +35,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
     let operator_registry = Arc::new(OperatorRegistry::new());
     let arrow_store = Arc::new(ArrowStore::new(&settings.arrow_store_dir));
     let identity_store = Arc::new(Mutex::new(IdentityStore::load(&settings.persona_root_dir)?));
+    let search_service = SearchService::open(&settings.search_index_dir)?;
     let meta = MetaSnapshot {
         slack_mirror_dir: settings.slack_mirror_dir.display().to_string(),
         linear_mirror_dir: settings.linear_mirror_dir.display().to_string(),
@@ -58,7 +61,10 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         slack_mirror_dir: Arc::new(settings.slack_mirror_dir.clone()),
         linear_mirror_dir: Arc::new(settings.linear_mirror_dir.clone()),
         slack_token,
+        search: search_service.clone(),
     };
+
+    spawn_periodic_reindex(state.clone());
 
     // Start background Slack sync task if token available
     if let Some(token) = settings.slack_token {

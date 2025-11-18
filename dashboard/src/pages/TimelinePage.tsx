@@ -1,15 +1,16 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { TimelineEntryList } from "../components/timeline/TimelineEntryList";
-import type { PersonaClickTarget } from "../components/timeline/types";
+import type { PersonaClickTarget, TimelineEntry } from "../components/timeline/types";
 import { useTimelineWindow, defaultTimelineWindow } from "./timeline/hooks/useTimelineWindow";
 import { useDomainSelection } from "./timeline/hooks/useDomainSelection";
 import { useTimelineData } from "./timeline/hooks/useTimelineData";
 import { useThreadSelection } from "./timeline/hooks/useThreadSelection";
+import { useTimelineSearch } from "./timeline/hooks/useTimelineSearch";
 import { timelineApiDataSource } from "./timeline/dataSource";
 import {
   type ThreadAdapterRegistry,
@@ -29,6 +30,7 @@ export default function TimelinePage() {
     [],
   );
 
+  const [searchQuery, setSearchQuery] = useState("");
   const windowState = useTimelineWindow(defaultTimelineWindow());
   const { window, setFrom, setTo, last24h } = windowState;
 
@@ -41,10 +43,39 @@ export default function TimelinePage() {
     domains: domainState.domains,
   });
 
+  const searchState = useTimelineSearch();
+
+  const handleSearch = () => {
+    if (searchQuery.trim()) {
+      searchState.search({
+        query: searchQuery,
+        domains: domainState.selectedDomains,
+        from: window.from,
+        to: window.to,
+      });
+    }
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery("");
+    searchState.clear();
+  };
+
+  const isSearchMode = searchState.results.length > 0 || (searchQuery.trim().length > 0 && !searchState.loading);
+  const displayEntries: TimelineEntry[] = isSearchMode
+    ? searchState.results.map((event) => ({
+        type: "event" as const,
+        at: event.at,
+        event,
+      }))
+    : timelineState.entries;
+
+  const displayThreadEntries = isSearchMode ? [] : timelineState.threadEntries;
+
   const threadState = useThreadSelection({
     adapters: threadAdapters,
     dataSource,
-    threadEntries: timelineState.threadEntries,
+    threadEntries: displayThreadEntries,
   });
 
   const handlePersonaClick = (target: PersonaClickTarget) => {
@@ -112,8 +143,28 @@ export default function TimelinePage() {
       </div>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Domains</CardTitle>
+        <CardHeader>
+          <CardTitle>Search & Filters</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Search timeline..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+            />
+            <Button onClick={handleSearch} disabled={!searchQuery.trim()}>
+              Search
+            </Button>
+            {isSearchMode && (
+              <Button variant="outline" onClick={handleClearSearch}>
+                Clear
+              </Button>
+            )}
+          </div>
           <div className="flex flex-wrap gap-2">
             {domainState.domains.map((domain) => {
               const active = domainState.selectedDomains.includes(domain.id);
@@ -132,11 +183,13 @@ export default function TimelinePage() {
               );
             })}
           </div>
-        </CardHeader>
-        <CardContent>
           <div className="flex flex-col gap-1 text-sm text-muted-foreground">
             {pageError ? (
               <p className="text-destructive-foreground">{pageError}</p>
+            ) : isSearchMode ? (
+              <p>
+                Found {searchState.total} results for "{searchQuery}"
+              </p>
             ) : (
               <p>
                 Showing {timelineState.entries.length} entries between{" "}
@@ -153,11 +206,13 @@ export default function TimelinePage() {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
         <ScrollArea className="h-[65vh] rounded-lg border border-border bg-card">
-          {timelineState.loading ? (
+          {(timelineState.loading || searchState.loading) ? (
             <div className="p-6 text-sm text-muted-foreground">Loading...</div>
+          ) : searchState.error ? (
+            <div className="p-6 text-sm text-destructive">{searchState.error}</div>
           ) : (
             <TimelineEntryList
-              entries={timelineState.entries}
+              entries={displayEntries}
               domainLookup={timelineState.domainLookup}
               identityLookup={timelineState.identityLookup}
               personaLookup={timelineState.personaLookup}

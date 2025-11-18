@@ -230,3 +230,46 @@ export async function getSlackThread(
   );
 }
 
+export interface SearchQuery {
+  query: string;
+  domains?: string[];
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SearchResponse {
+  events: EventEnvelope[];
+  total: number;
+}
+
+export async function searchTimeline(params: SearchQuery): Promise<SearchResponse> {
+  const url = new URL(`${API_ROOT}/api/search`);
+  url.searchParams.set("q", params.query);
+  if (params.domains?.length) {
+    url.searchParams.set("domains", params.domains.join(","));
+  }
+  if (params.from) {
+    url.searchParams.set("from", params.from);
+  }
+  if (params.to) {
+    url.searchParams.set("to", params.to);
+  }
+  if (params.limit) {
+    url.searchParams.set("limit", params.limit.toString());
+  }
+  if (params.offset) {
+    url.searchParams.set("offset", params.offset.toString());
+  }
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return (await response.json()) as SearchResponse;
+}
+
+export async function reindexSearch(): Promise<void> {
+  return request("/api/search/reindex", { method: "POST" });
+}
+

@@ -15,6 +15,7 @@ pub async fn serve(cfg: &Config) -> Result<()> {
         slack_mirror_dir: cfg.slack_mirror_dir.clone(),
         linear_mirror_dir: cfg.linear_mirror_dir.clone(),
         arrow_store_dir: cfg.arrow_store_dir.clone(),
+        search_index_dir: cfg.search_index_dir.clone(),
         persona_root_dir: cfg.persona_root.clone(),
         bind,
         static_dir: cfg.dashboard_static_dir.clone(),

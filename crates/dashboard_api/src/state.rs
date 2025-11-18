@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::search::SearchService;
 use arrow_store::ArrowStore;
 use core_model::adapters::EventAdapter;
 use core_model::domain::Domain;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub(crate) slack_mirror_dir: Arc<PathBuf>,
     pub(crate) linear_mirror_dir: Arc<PathBuf>,
     pub(crate) slack_token: Option<Arc<String>>,
+    pub(crate) search: SearchService,
 }
 
 #[derive(Clone, Serialize)]
@@ -42,4 +44,5 @@ pub struct DashboardServerSettings {
     pub bind: SocketAddr,
     pub static_dir: Option<PathBuf>,
     pub slack_token: Option<String>,
+    pub search_index_dir: PathBuf,
 }

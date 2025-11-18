@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use core_model::arrow::{Arrow, ArrowEndpoint};
 use core_model::domain::Domain;
 use core_model::event::EventEnvelope;
@@ -47,6 +47,15 @@ pub(crate) fn parse_time(value: &str) -> Result<DateTime<Utc>> {
             DateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S").map(|dt| dt.with_timezone(&Utc))
         })
         .with_context(|| format!("failed to parse datetime `{}`", value))
+}
+
+pub(crate) fn full_history_window() -> TimeWindow {
+    let start = Utc
+        .timestamp_opt(0, 0)
+        .single()
+        .expect("unix epoch should be representable");
+    let end = Utc::now() + Duration::days(365 * 100);
+    TimeWindow { start, end }
 }
 
 pub(crate) fn select_domains(csv: Option<&str>, state: &AppState) -> Result<Vec<Domain>> {

@@ -269,6 +269,7 @@ function normalizeSlackMarkup(text: string) {
       label ? label : command,
     )
     .replace(/<([^>|]+)\|([^>]+)>/g, (_match, url, label) => `${label} (${url})`)
-    .replace(/<([^>]+)>/g, (_match, value) => value);
+    .replace(/<([^>]+)>/g, (_match, value) => value)
+    .replace(/:[a-z0-9_+-]+:/gi, "");
 }
 

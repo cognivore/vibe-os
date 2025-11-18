@@ -108,7 +108,13 @@ impl CliCommand for LinearCommand {
                 let api_key = config::linear_api_key()?;
                 let client = linear::LinearClient::new(api_key);
                 let issue = client
-                    .create_issue(team_id, title, description, *priority, assignee_id.as_deref())
+                    .create_issue(
+                        team_id,
+                        title,
+                        description,
+                        *priority,
+                        assignee_id.as_deref(),
+                    )
                     .await?;
 
                 println!("Created issue {} (id={})", issue.identifier, issue.id);

@@ -8,6 +8,7 @@ mod arrows;
 mod events;
 mod identities;
 mod operators;
+mod search;
 mod slack;
 
 pub fn build_api_router() -> Router<AppState> {
@@ -18,6 +19,8 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/operators", get(operators::list_operators))
         .route("/operators/run", post(operators::run_operator))
         .route("/arrows", get(arrows::list_arrows))
+        .route("/search", get(search::execute_search))
+        .route("/search/reindex", post(search::reindex))
         .route(
             "/slack/threads/:channel/:thread_ts",
             get(slack::get_slack_thread),

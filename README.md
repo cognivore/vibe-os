@@ -112,6 +112,8 @@ This boots the Axum server that exposes `/api/*` plus the static React dashboard
 - `VIBEOS_DASHBOARD_BIND` (default `127.0.0.1:3000`)
 - `VIBEOS_DASHBOARD_STATIC_DIR` (optional pre-built frontend directory)
 
+The API server includes a Tantivy-backed full-text search index that indexes all Slack messages and Linear issues. The search index is stored in `VIBEOS_SEARCH_INDEX_DIR` (default `./search_index`) and is automatically created on first run. To manually trigger a full reindex, use the `/api/search/reindex` endpoint (POST). The index is also incrementally updated via a background task that runs every 5 minutes.
+
 ### Frontend dashboard (pnpm + Vite)
 
 The React dashboard lives under `dashboard/` and talks to the Rust API.
