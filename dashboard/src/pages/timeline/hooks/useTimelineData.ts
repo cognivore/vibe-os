@@ -118,13 +118,15 @@ export function useTimelineData({
   }, [events, threadAdapters]);
 
   const entries = useMemo<TimelineEntry[]>(() => {
-    // Build a set of all entity_ids that are represented as threads
-    const threadEntityIds = new Set<string>();
+    // Build a set of all thread keys
+    const slackThreadIds = new Set<string>();
+    const linearIssueIds = new Set<string>();
+
     threadEntries.forEach((thread) => {
       if (thread.type === "slack_thread") {
-        threadEntityIds.add(thread.threadId);
+        slackThreadIds.add(thread.threadId);
       } else if (thread.type === "linear_thread") {
-        threadEntityIds.add(thread.issueId);
+        linearIssueIds.add(thread.issueId);
       }
     });
 
@@ -134,10 +136,26 @@ export function useTimelineData({
       if (event.domain === "linear") {
         return false;
       }
-      // For Slack: filter out if entity_id matches a thread
-      if (event.domain === "slack" && event.entity_id) {
-        return !threadEntityIds.has(event.entity_id);
+
+      // For Slack: construct thread key and check if it matches any thread
+      if (event.domain === "slack") {
+        const data = event.data as any;
+        const ts = typeof data.ts === "string" ? data.ts : undefined;
+        const threadTs =
+          typeof data.thread_ts === "string" && data.thread_ts
+            ? data.thread_ts
+            : ts;
+        const channelId =
+          (typeof data.channel === "string" && data.channel) ||
+          event.entity_id ||
+          "";
+
+        if (channelId && threadTs) {
+          const threadKey = `${channelId}:${threadTs}`;
+          return !slackThreadIds.has(threadKey);
+        }
       }
+
       // Keep all other events
       return true;
     });
