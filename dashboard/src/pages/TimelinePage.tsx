@@ -153,7 +153,7 @@ export default function TimelinePage() {
 
   const searchEventEntries = useMemo<TimelineEntry[]>(() => {
     if (!searchState.results.length) return [];
-    
+
     // Build a set of all entity_ids that are represented as threads in search results
     const searchThreadEntityIds = new Set<string>();
     searchThreadEntries.forEach((thread) => {

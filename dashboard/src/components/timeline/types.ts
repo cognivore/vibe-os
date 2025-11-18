@@ -75,6 +75,12 @@ export type LinearEventData = {
   issue_title?: string | null;
   issue_description?: string | null;
   issue_url?: string | null;
+  issue_assignee?: string | null;
+  issue_state?: string | null;
+  issue_state_type?: string | null;
+  issue_team?: string | null;
+  issue_priority?: number | null;
+  issue_labels?: string[];
   comment_body?: string | null;
   comment_url?: string | null;
   event_kind?: string;

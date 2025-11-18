@@ -54,6 +54,13 @@ struct IssueSnapshotRow {
     description: Option<String>,
     identifier: Option<String>,
     url: Option<String>,
+    assignee_name: Option<String>,
+    state_name: Option<String>,
+    state_type: Option<String>,
+    team_name: Option<String>,
+    priority: Option<i32>,
+    #[serde(default)]
+    labels: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +69,12 @@ pub struct LinearIssueSummary {
     pub description: Option<String>,
     pub identifier: Option<String>,
     pub url: Option<String>,
+    pub assignee_name: Option<String>,
+    pub state_name: Option<String>,
+    pub state_type: Option<String>,
+    pub team_name: Option<String>,
+    pub priority: Option<i32>,
+    pub labels: Vec<String>,
 }
 
 pub fn event_logs(root: &Path) -> Result<Vec<PathBuf>> {
@@ -107,6 +120,12 @@ pub fn load_issue_summaries(root: &Path) -> Result<HashMap<String, LinearIssueSu
                 description: row.description.clone(),
                 identifier: row.identifier.clone(),
                 url: row.url.clone(),
+                assignee_name: row.assignee_name.clone(),
+                state_name: row.state_name.clone(),
+                state_type: row.state_type.clone(),
+                team_name: row.team_name.clone(),
+                priority: row.priority,
+                labels: row.labels.clone(),
             },
         );
     }

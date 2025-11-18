@@ -71,6 +71,33 @@ pub fn enrich_issue_metadata(value: &mut Value, summary: Option<&LinearIssueSumm
         if let Some(identifier) = &summary.identifier {
             obj.insert("issue_identifier".into(), Value::String(identifier.clone()));
         }
+        if let Some(assignee) = &summary.assignee_name {
+            obj.insert("issue_assignee".into(), Value::String(assignee.clone()));
+        }
+        if let Some(state) = &summary.state_name {
+            obj.insert("issue_state".into(), Value::String(state.clone()));
+        }
+        if let Some(state_type) = &summary.state_type {
+            obj.insert("issue_state_type".into(), Value::String(state_type.clone()));
+        }
+        if let Some(team) = &summary.team_name {
+            obj.insert("issue_team".into(), Value::String(team.clone()));
+        }
+        if let Some(priority) = summary.priority {
+            obj.insert("issue_priority".into(), Value::Number(priority.into()));
+        }
+        if !summary.labels.is_empty() {
+            obj.insert(
+                "issue_labels".into(),
+                Value::Array(
+                    summary
+                        .labels
+                        .iter()
+                        .map(|label| Value::String(label.clone()))
+                        .collect(),
+                ),
+            );
+        }
     }
 }
 
@@ -113,6 +140,33 @@ pub fn map_comment_record(
         }
         if let Some(url) = &summary.url {
             data_map.insert("issue_url".into(), Value::String(url.clone()));
+        }
+        if let Some(assignee) = &summary.assignee_name {
+            data_map.insert("issue_assignee".into(), Value::String(assignee.clone()));
+        }
+        if let Some(state) = &summary.state_name {
+            data_map.insert("issue_state".into(), Value::String(state.clone()));
+        }
+        if let Some(state_type) = &summary.state_type {
+            data_map.insert("issue_state_type".into(), Value::String(state_type.clone()));
+        }
+        if let Some(team) = &summary.team_name {
+            data_map.insert("issue_team".into(), Value::String(team.clone()));
+        }
+        if let Some(priority) = summary.priority {
+            data_map.insert("issue_priority".into(), Value::Number(priority.into()));
+        }
+        if !summary.labels.is_empty() {
+            data_map.insert(
+                "issue_labels".into(),
+                Value::Array(
+                    summary
+                        .labels
+                        .iter()
+                        .map(|label| Value::String(label.clone()))
+                        .collect(),
+                ),
+            );
         }
     }
     let persona_key = record.user_id.as_ref().map(|id| PersonaKey {
