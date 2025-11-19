@@ -8,6 +8,7 @@ use domain_adapters::SlackAdapter;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
+use crate::routes::slack::fetch_thread_via_api_if_possible;
 use crate::search::{rebuild_full_index, SearchRequest, SearchResult};
 use crate::state::AppState;
 use crate::utils::{build_window, parse_domains_csv};
@@ -180,17 +181,39 @@ pub async fn get_thread_titles(
         let channel_id = parts[0];
         let thread_ts = parts[1].replace('_', ".");
 
-        // Load thread from Slack mirror
-        match adapter.load_thread(channel_id, &thread_ts) {
-            Ok(events) => {
-                // Find root message where ts == thread_ts
-                if let Some(root_text) = find_root_message_text(&events, &thread_ts) {
-                    titles.insert(thread_id, root_text);
+        // Load thread from Slack mirror, fallback to Slack API if needed
+        let events = match adapter.load_thread(channel_id, &thread_ts) {
+            Ok(events) => events,
+            Err(err) => {
+                tracing::debug!(
+                    "Failed to load thread {} from mirror for title lookup: {}",
+                    thread_id,
+                    err
+                );
+                match fetch_thread_via_api_if_possible(
+                    &state,
+                    channel_id,
+                    &thread_ts,
+                    "fetching Slack thread title",
+                )
+                .await
+                {
+                    Ok(events) => events,
+                    Err(api_err) => {
+                        tracing::warn!(
+                            "Unable to fetch Slack thread {} for title lookup: {:?}",
+                            thread_id,
+                            api_err
+                        );
+                        continue;
+                    }
                 }
             }
-            Err(e) => {
-                tracing::debug!("Failed to load thread {} for title: {}", thread_id, e);
-            }
+        };
+
+        // Find root message where ts == thread_ts
+        if let Some(root_text) = find_root_message_text(&events, &thread_ts) {
+            titles.insert(thread_id, root_text);
         }
     }
 

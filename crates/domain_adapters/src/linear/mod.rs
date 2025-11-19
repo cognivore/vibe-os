@@ -110,7 +110,7 @@ fn load_issue_events(
             let record: LinearEventRecord = serde_json::from_str(&line)
                 .with_context(|| format!("failed to parse Linear event in {}", path.display()))?;
             let matches_issue = record.issue_id == issue_id
-                || issue_identifier.map_or(false, |target| {
+                || issue_identifier.is_some_and(|target| {
                     record
                         .issue_identifier
                         .as_deref()

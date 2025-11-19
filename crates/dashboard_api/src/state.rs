@@ -24,6 +24,7 @@ pub struct AppState {
     pub(crate) slack_mirror_dir: Arc<PathBuf>,
     pub(crate) linear_mirror_dir: Arc<PathBuf>,
     pub(crate) slack_token: Option<Arc<String>>,
+    #[allow(dead_code)]
     pub(crate) linear_api_key: Option<Arc<String>>,
     pub(crate) search: SearchService,
 }

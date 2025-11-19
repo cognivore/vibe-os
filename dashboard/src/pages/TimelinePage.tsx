@@ -151,63 +151,13 @@ export default function TimelinePage() {
     };
   }, [searchState.results, threadAdapters]);
 
-  const searchEventEntries = useMemo<TimelineEntry[]>(() => {
-    if (!searchState.results.length) return [];
-
-    // Build a set of all thread keys
-    const slackThreadIds = new Set<string>();
-    const linearIssueIds = new Set<string>();
-
-    searchThreadEntries.forEach((thread) => {
-      if (thread.type === "slack_thread") {
-        slackThreadIds.add(thread.threadId);
-      } else if (thread.type === "linear_thread") {
-        linearIssueIds.add(thread.issueId);
-      }
-    });
-
-    return searchState.results
-      .filter((event) => {
-        // For Linear: ALWAYS filter out (always part of issue thread)
-        if (event.domain === "linear") {
-          return false;
-        }
-
-        // For Slack: construct thread key and check if it matches any thread
-        if (event.domain === "slack") {
-          const data = event.data as any;
-          const ts = typeof data.ts === "string" ? data.ts : undefined;
-          const threadTs =
-            typeof data.thread_ts === "string" && data.thread_ts
-              ? data.thread_ts
-              : ts;
-          const channelId =
-            (typeof data.channel === "string" && data.channel) ||
-            event.entity_id ||
-            "";
-
-          if (channelId && threadTs) {
-            const threadKey = `${channelId}:${threadTs}`;
-            return !slackThreadIds.has(threadKey);
-          }
-        }
-
-        // Keep all other events
-        return true;
-      })
-      .map((event) => ({
-        type: "event" as const,
-        at: event.at,
-        event,
-      }));
-  }, [searchState.results, searchThreadEntries]);
-
   const searchEntries = useMemo<TimelineEntry[]>(
     () =>
-      [...searchEventEntries, ...searchThreadEntries].sort(
+      // Search results should only show threads, never individual messages
+      searchThreadEntries.sort(
         (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
       ),
-    [searchEventEntries, searchThreadEntries],
+    [searchThreadEntries],
   );
 
   const hasSearchQuery = searchQuery.trim().length > 0;

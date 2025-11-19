@@ -74,7 +74,7 @@ pub async fn get_slack_thread(
     }))
 }
 
-async fn fetch_thread_via_api_if_possible(
+pub(crate) async fn fetch_thread_via_api_if_possible(
     state: &AppState,
     channel_id: &str,
     thread_ts: &str,
