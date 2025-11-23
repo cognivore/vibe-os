@@ -11,7 +11,7 @@ use axum::Router;
 use core_operators::OperatorRegistry;
 use core_persona::store::IdentityStore;
 use tokio::sync::Mutex;
-use tokio::time::sleep;
+use tokio::time::{interval, sleep};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::{
     DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
@@ -22,16 +22,18 @@ mod error;
 mod routes;
 mod search;
 mod state;
+mod timeline_cache;
 mod utils;
 
 pub use state::DashboardServerSettings;
 
 use search::{spawn_periodic_reindex, SearchService};
 use state::{AppState, MetaSnapshot};
-use utils::build_adapters;
+use timeline_cache::TimelineCache;
+use utils::{build_adapters, default_timeline_window};
 
 pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<()> {
-    let adapters = build_adapters(&settings);
+    let adapters = Arc::new(build_adapters(&settings));
     let operator_registry = Arc::new(OperatorRegistry::new());
     let arrow_store = Arc::new(ArrowStore::new(&settings.arrow_store_dir));
     let identity_store = Arc::new(Mutex::new(IdentityStore::load(&settings.persona_root_dir)?));
@@ -56,8 +58,10 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         Arc::new(key)
     });
 
+    let timeline_cache = Arc::new(TimelineCache::new(adapters.clone(), identity_store.clone()));
+
     let state = AppState {
-        adapters: Arc::new(adapters),
+        adapters: adapters.clone(),
         operator_registry,
         arrow_store,
         identity_store,
@@ -67,9 +71,37 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         slack_token,
         linear_api_key,
         search: search_service.clone(),
+        timeline_cache: timeline_cache.clone(),
     };
 
     spawn_periodic_reindex(state.clone());
+
+    let warm_domains: Vec<_> = adapters.keys().cloned().collect();
+    let warm_window = default_timeline_window();
+    if let Err(err) = timeline_cache
+        .ensure_window(&warm_domains, &warm_window)
+        .await
+    {
+        error!("Failed to warm timeline cache: {}", err);
+    }
+
+    {
+        let refresh_cache = timeline_cache.clone();
+        let refresh_domains = warm_domains.clone();
+        tokio::spawn(async move {
+            let mut ticker = interval(Duration::from_secs(60));
+            loop {
+                ticker.tick().await;
+                let latest_window = default_timeline_window();
+                if let Err(err) = refresh_cache
+                    .ensure_window(&refresh_domains, &latest_window)
+                    .await
+                {
+                    error!("Failed to refresh timeline cache: {}", err);
+                }
+            }
+        });
+    }
 
     // Start background Slack sync task if token available
     if let Some(token) = settings.slack_token {

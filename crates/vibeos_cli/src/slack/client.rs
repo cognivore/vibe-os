@@ -6,7 +6,7 @@ use super::storage::{
     write_jsonl,
 };
 use super::types::{SlackMessage, SlackUserSnapshot, CONVERSATIONS_DIR, PROFILES_DIR, THREADS_DIR};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 
 pub struct SlackClient {
@@ -61,6 +61,32 @@ impl SlackClient {
         ensure_dir(&conversations_dir)?;
         ensure_dir(&threads_dir)?;
 
+        let mirror_result = self
+            .mirror_conversations(&conversations_dir, &threads_dir)
+            .await;
+
+        println!("Syncing Slack user profiles...");
+        let profile_result = self.sync_user_directory(output_dir).await;
+
+        match (mirror_result, profile_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(err), Ok(())) => Err(err),
+            (Ok(()), Err(err)) => Err(err),
+            (Err(mirror_err), Err(profile_err)) => {
+                let profile_msg = profile_err.to_string();
+                Err::<(), anyhow::Error>(mirror_err).context(format!(
+                    "Slack user directory sync also failed: {}",
+                    profile_msg
+                ))
+            }
+        }
+    }
+
+    async fn mirror_conversations(
+        &self,
+        conversations_dir: &Path,
+        threads_dir: &Path,
+    ) -> Result<()> {
         let conversations = self.list_all_conversations().await?;
         println!("Found {} conversations to mirror", conversations.len());
 
@@ -98,44 +124,35 @@ impl SlackClient {
 
             // Sync threads: prioritize new messages first, then check existing threads
             // This balances fresh content with keeping existing threads up to date
+
+            // First, sync threads for new messages
             for msg in &new_messages {
                 if should_fetch_thread(msg) {
                     let thread_ts = msg.thread_ts.as_deref().unwrap_or(&msg.ts);
-                    let thread_path = threads_dir.join(thread_filename(&conv.id, thread_ts));
-                    let last_thread_ts = latest_ts_from_file(&thread_path)?;
+                    self.sync_thread(&conv.id, thread_ts, threads_dir).await?;
+                }
+            }
 
-                    let fetched_replies = self
-                        .fetch_thread_replies_since(&conv.id, thread_ts, last_thread_ts.as_deref())
-                        .await?;
-                    let new_replies = filter_newer(fetched_replies, last_thread_ts.as_deref());
-
-                    match (last_thread_ts.is_some(), new_replies.is_empty()) {
-                        (_, true) => {
-                            // Thread up to date
-                        }
-                        (true, false) => {
-                            append_jsonl(&thread_path, &new_replies)?;
-                            println!(
-                                "  Appended {} thread messages to {}",
-                                new_replies.len(),
-                                thread_path.display()
-                            );
-                        }
-                        (false, false) => {
-                            write_jsonl(&thread_path, &new_replies)?;
-                            println!(
-                                "  Wrote {} thread messages to {}",
-                                new_replies.len(),
-                                thread_path.display()
-                            );
+            // Then, check all existing threads for updates
+            // This ensures we catch replies to old threads
+            if let Ok(entries) = std::fs::read_dir(threads_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                        // Extract channel_id and thread_ts from filename
+                        // Format: {channel_id}_{thread_ts}.jsonl where thread_ts has . replaced with _
+                        if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
+                            if filename.starts_with(&conv.id) {
+                                // Extract thread_ts by removing channel_id prefix
+                                let thread_ts_part = &filename[conv.id.len() + 1..];
+                                let thread_ts = thread_ts_part.replace('_', ".");
+                                self.sync_thread(&conv.id, &thread_ts, threads_dir).await?;
+                            }
                         }
                     }
                 }
             }
         }
-
-        println!("Syncing Slack user profiles...");
-        self.sync_user_directory(output_dir).await?;
 
         Ok(())
     }
@@ -147,6 +164,45 @@ impl SlackClient {
     ) -> Result<Vec<SlackMessage>> {
         self.fetch_thread_replies_since(channel_id, thread_ts, None)
             .await
+    }
+
+    async fn sync_thread(
+        &self,
+        channel_id: &str,
+        thread_ts: &str,
+        threads_dir: &Path,
+    ) -> Result<()> {
+        let thread_path = threads_dir.join(thread_filename(channel_id, thread_ts));
+        let last_thread_ts = latest_ts_from_file(&thread_path)?;
+
+        let fetched_replies = self
+            .fetch_thread_replies_since(channel_id, thread_ts, last_thread_ts.as_deref())
+            .await?;
+        let new_replies = filter_newer(fetched_replies, last_thread_ts.as_deref());
+
+        match (last_thread_ts.is_some(), new_replies.is_empty()) {
+            (_, true) => {
+                // Thread up to date
+            }
+            (true, false) => {
+                append_jsonl(&thread_path, &new_replies)?;
+                println!(
+                    "  Appended {} thread messages to {}",
+                    new_replies.len(),
+                    thread_path.display()
+                );
+            }
+            (false, false) => {
+                write_jsonl(&thread_path, &new_replies)?;
+                println!(
+                    "  Wrote {} thread messages to {}",
+                    new_replies.len(),
+                    thread_path.display()
+                );
+            }
+        }
+
+        Ok(())
     }
 
     async fn sync_user_directory(&self, output_dir: &Path) -> Result<()> {

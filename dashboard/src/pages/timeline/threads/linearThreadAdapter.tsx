@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "../../../components/ui/button";
 import { ActorChip } from "../../../components/timeline/entries/ActorChip";
 import { LinearEventBody } from "../../../components/timeline/entries/EventEntry";
@@ -12,6 +12,7 @@ import type {
   ThreadPanelProps,
   TimelineDataSource,
 } from "../adapters";
+import { exportLinearThreadToMarkdown, downloadMarkdown, copyToClipboard } from "./exportUtils";
 
 export const linearThreadAdapter: ThreadAdapter<LinearThreadEntry> = {
   kind: "linear_thread",
@@ -109,6 +110,8 @@ function LinearThreadPanel({
   loading,
   error,
 }: ThreadPanelProps<LinearThreadEntry>) {
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
+
   const comments = useMemo(
     () =>
       [...thread.comments].sort(
@@ -135,6 +138,22 @@ function LinearThreadPanel({
   );
   const issueTitle =
     thread.issueTitle ?? thread.issueIdentifier ?? "Linear issue";
+
+  const handleExportMarkdown = () => {
+    const markdown = exportLinearThreadToMarkdown(thread, identityLookup, personaLookup);
+    const filename = `linear-issue-${thread.issueIdentifier ?? thread.issueId}-${new Date().toISOString().split('T')[0]}.md`;
+    downloadMarkdown(markdown, filename);
+    setExportStatus("Downloaded!");
+    setTimeout(() => setExportStatus(null), 2000);
+  };
+
+  const handleCopyMarkdown = async () => {
+    const markdown = exportLinearThreadToMarkdown(thread, identityLookup, personaLookup);
+    await copyToClipboard(markdown);
+    setExportStatus("Copied!");
+    setTimeout(() => setExportStatus(null), 2000);
+  };
+
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="flex items-start justify-between gap-2">
@@ -162,9 +181,17 @@ function LinearThreadPanel({
             {timeline.length} activity item{timeline.length === 1 ? "" : "s"}
           </p>
         </div>
-        <Button variant="ghost" size="sm" onClick={onClose}>
-          Close
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={handleCopyMarkdown}>
+            {exportStatus === "Copied!" ? "Copied!" : "Copy MD"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExportMarkdown}>
+            {exportStatus === "Downloaded!" ? "Downloaded!" : "Export MD"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Close
+          </Button>
+        </div>
       </div>
       {thread.issueDescription ? (
         <p className="whitespace-pre-wrap text-sm text-muted-foreground">

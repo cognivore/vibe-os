@@ -15,6 +15,7 @@ import type {
 import type {
   LinearIssueResponse,
   SlackThreadResponse,
+  TimelineEventsResponse,
 } from "../../api/client";
 
 export interface TimelineWindow {
@@ -26,12 +27,13 @@ export interface TimelineDataQuery {
   domains: string[];
   window: TimelineWindow;
   limit?: number;
+  cursor?: number;
 }
 
 export interface TimelineDataSource {
   fetchDomains(): Promise<DomainDescriptor[]>;
   fetchIdentities(): Promise<Identity[]>;
-  fetchEvents(query: TimelineDataQuery): Promise<EventEnvelope[]>;
+  fetchEvents(query: TimelineDataQuery): Promise<TimelineEventsResponse>;
   fetchArrows(window: TimelineWindow): Promise<Arrow[]>;
   fetchSlackThread(channelId: string, threadTs: string): Promise<SlackThreadResponse>;
   fetchLinearIssue(issueRef: string): Promise<LinearIssueResponse>;
@@ -67,5 +69,6 @@ export interface TimelineDataResult {
   domainLookup: Record<string, string>;
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  providerPersonaLabels: Record<string, string>;
 }
 

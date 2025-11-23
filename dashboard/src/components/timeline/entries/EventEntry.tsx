@@ -16,6 +16,7 @@ interface EventEntryProps {
   event: EventEnvelope & { thread_name?: string | null };
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  providerPersonaLabels?: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
 }
 
@@ -23,6 +24,7 @@ export function EventEntry({
   event,
   identityLookup,
   personaLookup,
+  providerPersonaLabels,
   onPersonaClick,
 }: EventEntryProps) {
   const threadName = (event as { thread_name?: string | null }).thread_name;
@@ -51,6 +53,7 @@ export function EventEntry({
             event={event}
             identities={identityLookup}
             personas={personaLookup}
+            providerPersonaLabels={providerPersonaLabels}
             onPersonaClick={onPersonaClick}
           />
         </div>

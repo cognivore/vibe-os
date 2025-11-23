@@ -76,11 +76,14 @@ export function ProviderPersonaBrowser({
                 const isSelected = selectedPersonaKey === personaKey;
                 const displayTitle =
                   providerMode === "slack"
-                    ? (persona as SlackProviderPersona).display_name ??
-                      (persona as SlackProviderPersona).real_name ??
+                    ? (persona as SlackProviderPersona).real_name ??
+                      (persona as SlackProviderPersona).display_name ??
+                      (persona as SlackProviderPersona).username ??
+                      (persona as SlackProviderPersona).email ??
                       persona.user_id
-                    : (persona as LinearProviderPersona).display_name ??
-                      (persona as LinearProviderPersona).name ??
+                    : (persona as LinearProviderPersona).name ??
+                      (persona as LinearProviderPersona).display_name ??
+                      (persona as LinearProviderPersona).email ??
                       persona.user_id;
 
                 const email =

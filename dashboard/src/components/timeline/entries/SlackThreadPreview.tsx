@@ -20,6 +20,7 @@ interface SlackThreadPreviewProps {
   domainLookup: Record<string, string>;
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  providerPersonaLabels: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
   onThreadSelect?: (thread: SlackThreadEntry) => void;
   isActive?: boolean;
@@ -31,6 +32,7 @@ export function SlackThreadPreview({
   domainLookup,
   identityLookup,
   personaLookup,
+  providerPersonaLabels,
   onPersonaClick,
   onThreadSelect,
   isActive,
@@ -64,6 +66,7 @@ export function SlackThreadPreview({
               event={entry.root}
               identities={identityLookup}
               personas={personaLookup}
+              providerPersonaLabels={providerPersonaLabels}
               onPersonaClick={onPersonaClick}
             />
           </div>

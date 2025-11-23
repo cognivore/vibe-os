@@ -12,6 +12,7 @@ interface ActorChipProps {
   event: EventEnvelope;
   identities: Record<string, Identity>;
   personas: Record<string, { persona: Persona; identityId: string }>;
+  providerPersonaLabels?: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
 }
 
@@ -19,6 +20,7 @@ export function ActorChip({
   event,
   identities,
   personas,
+  providerPersonaLabels = {},
   onPersonaClick,
 }: ActorChipProps) {
   if (event.actor_identity_id && identities[event.actor_identity_id]) {
@@ -50,6 +52,9 @@ export function ActorChip({
   }
   if (event.actor_persona_key) {
     const personaKey = event.actor_persona_key;
+    const providerLabel = providerPersonaLabels[formatPersonaKey(personaKey)];
+    const display =
+      providerLabel ?? `@${personaKey.local_id}`;
     return (
       <Badge
         variant="outline"
@@ -58,7 +63,8 @@ export function ActorChip({
           onPersonaClick?.({ persona: personaKey, label: undefined })
         }
       >
-        @{personaKey.local_id} ({personaKey.domain})
+        {display}
+        {providerLabel ? "" : ` (${personaKey.domain})`}
       </Badge>
     );
   }
@@ -69,6 +75,7 @@ interface ArrowAuthorChipProps {
   arrow: Arrow;
   identities: Record<string, Identity>;
   personas: Record<string, { persona: Persona; identityId: string }>;
+  providerPersonaLabels?: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
 }
 
@@ -76,6 +83,7 @@ export function ArrowAuthorChip({
   arrow,
   identities,
   personas,
+  providerPersonaLabels = {},
   onPersonaClick,
 }: ArrowAuthorChipProps) {
   if (arrow.author_identity_id && identities[arrow.author_identity_id]) {
@@ -108,6 +116,9 @@ export function ArrowAuthorChip({
   }
   if (arrow.author_persona_key) {
     const personaKey = arrow.author_persona_key;
+    const providerLabel = providerPersonaLabels[formatPersonaKey(personaKey)];
+    const display =
+      providerLabel ?? `${personaKey.domain}:${personaKey.local_id}`;
     return (
       <Badge
         variant="outline"
@@ -119,7 +130,7 @@ export function ArrowAuthorChip({
           })
         }
       >
-        {personaKey.domain}:{personaKey.local_id}
+        {display}
       </Badge>
     );
   }
@@ -130,5 +141,9 @@ function normalizePersonaKey(
   key?: PersonaKey | null,
 ): PersonaKey | undefined {
   return key ?? undefined;
+}
+
+function formatPersonaKey(key: PersonaKey): string {
+  return `${key.domain}:${key.local_id}`;
 }
 

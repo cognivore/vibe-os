@@ -16,6 +16,7 @@ interface TimelineEntryListProps {
   domainLookup?: Record<string, string>;
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  providerPersonaLabels?: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
   onThreadSelect?: (thread: SlackThreadEntry | LinearThreadEntry) => void;
   activeThreadKey?: string;
@@ -27,6 +28,7 @@ export function TimelineEntryList({
   domainLookup = {},
   identityLookup,
   personaLookup,
+  providerPersonaLabels = {},
   onPersonaClick,
   onThreadSelect,
   activeThreadKey,
@@ -42,6 +44,7 @@ export function TimelineEntryList({
               event={entry.event}
               identityLookup={identityLookup}
               personaLookup={personaLookup}
+              providerPersonaLabels={providerPersonaLabels}
               onPersonaClick={onPersonaClick}
             />
           );
@@ -55,6 +58,7 @@ export function TimelineEntryList({
               domainLookup={domainLookup}
               identityLookup={identityLookup}
               personaLookup={personaLookup}
+              providerPersonaLabels={providerPersonaLabels}
               onPersonaClick={onPersonaClick}
               onThreadSelect={onThreadSelect}
               isActive={activeThreadKey === `slack:${entry.threadId}`}
@@ -85,6 +89,7 @@ export function TimelineEntryList({
               domainLookup={domainLookup}
               identityLookup={identityLookup}
               personaLookup={personaLookup}
+              providerPersonaLabels={providerPersonaLabels}
               onPersonaClick={onPersonaClick}
             />
           );
@@ -100,6 +105,7 @@ interface ArrowEntryProps {
   domainLookup: Record<string, string>;
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  providerPersonaLabels: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
 }
 
@@ -108,6 +114,7 @@ function ArrowEntry({
   domainLookup,
   identityLookup,
   personaLookup,
+  providerPersonaLabels,
   onPersonaClick,
 }: ArrowEntryProps) {
   const sourceLabel =
@@ -132,6 +139,7 @@ function ArrowEntry({
             arrow={arrow}
             identities={identityLookup}
             personas={personaLookup}
+            providerPersonaLabels={providerPersonaLabels}
             onPersonaClick={onPersonaClick}
           />
         </div>

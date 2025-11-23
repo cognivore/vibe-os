@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "../../../components/ui/button";
 import { getThreadTitles } from "../../../api/client";
 import {
@@ -18,6 +18,7 @@ import type {
   TimelineDataSource,
 } from "../adapters";
 import { parseSlackThreadKey } from "../threadUtils";
+import { exportSlackThreadToMarkdown, downloadMarkdown, copyToClipboard } from "./exportUtils";
 
 export const slackThreadAdapter: ThreadAdapter<SlackThreadEntry> = {
   kind: "slack_thread",
@@ -130,6 +131,8 @@ function SlackThreadPanel({
   loading,
   error,
 }: ThreadPanelProps<SlackThreadEntry>) {
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
+
   const messages = useMemo(
     () =>
       [thread.root, ...thread.replies].sort(
@@ -149,6 +152,21 @@ function SlackThreadPanel({
     ? normalizeSlackMarkup(thread.threadTitle)
     : (thread.channelId ? `#${thread.channelId}` : "thread");
 
+  const handleExportMarkdown = () => {
+    const markdown = exportSlackThreadToMarkdown(thread, identityLookup, personaLookup);
+    const filename = `slack-thread-${thread.channelId}-${new Date().toISOString().split('T')[0]}.md`;
+    downloadMarkdown(markdown, filename);
+    setExportStatus("Downloaded!");
+    setTimeout(() => setExportStatus(null), 2000);
+  };
+
+  const handleCopyMarkdown = async () => {
+    const markdown = exportSlackThreadToMarkdown(thread, identityLookup, personaLookup);
+    await copyToClipboard(markdown);
+    setExportStatus("Copied!");
+    setTimeout(() => setExportStatus(null), 2000);
+  };
+
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="flex items-start justify-between gap-2">
@@ -166,9 +184,17 @@ function SlackThreadPanel({
             </p>
           )}
         </div>
-        <Button variant="ghost" size="sm" onClick={onClose}>
-          Close
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={handleCopyMarkdown}>
+            {exportStatus === "Copied!" ? "Copied!" : "Copy MD"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExportMarkdown}>
+            {exportStatus === "Downloaded!" ? "Downloaded!" : "Export MD"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Close
+          </Button>
+        </div>
       </div>
       {loading ? (
         <p className="text-xs text-muted-foreground">Refreshing full thread…</p>

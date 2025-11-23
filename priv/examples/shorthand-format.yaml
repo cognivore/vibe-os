@@ -1,7 +1,0 @@
-who: alice@ENG
-why: |
-  Using @ shorthand notation for team assignment is more concise and readable than separate fields.
-what: |
-  - [ ] Review implementation
-  - [ ] Update documentation
-  - [ ] Deploy to staging

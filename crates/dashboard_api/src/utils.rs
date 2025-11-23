@@ -58,6 +58,12 @@ pub(crate) fn full_history_window() -> TimeWindow {
     TimeWindow { start, end }
 }
 
+pub(crate) fn default_timeline_window() -> TimeWindow {
+    let end = Utc::now();
+    let start = end - Duration::days(90);
+    TimeWindow { start, end }
+}
+
 pub(crate) fn select_domains(csv: Option<&str>, state: &AppState) -> Result<Vec<Domain>> {
     if let Some(raw) = csv {
         if raw.trim().is_empty() {

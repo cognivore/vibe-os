@@ -53,9 +53,11 @@ export default function IdentityProfilePage() {
     setError(null);
     const query: EventsQuery = { from, to, limit: 200, identityId: id };
     Promise.all([getIdentity(id), getEvents(query)])
-      .then(([identityData, eventData]) => {
+      .then(([identityData, eventResponse]) => {
         setIdentity(identityData);
-        setEvents(eventData);
+        const normalizedEvents =
+          eventResponse.mode === "snapshot" ? eventResponse.events : eventResponse.added;
+        setEvents(normalizedEvents);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));

@@ -22,6 +22,7 @@ export function createTimelineApiDataSource(): TimelineDataSource {
         from: query.window.from,
         to: query.window.to,
         limit: query.limit,
+        cursor: query.cursor,
       }),
     fetchArrows: (window: TimelineWindow) =>
       getArrows({

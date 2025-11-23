@@ -1,16 +1,16 @@
-use anyhow::anyhow;
 use axum::extract::{Query, State};
 use axum::Json;
 use core_model::domain::builtin_domains;
 use core_model::event::EventEnvelope;
+use core_model::time::TimeWindow;
+use core_persona::identity::IdentityId;
 use core_persona::provider::{LinearProviderPersona, SlackProviderPersona};
 use domain_adapters::{load_linear_personas, load_slack_personas};
 use serde::{Deserialize, Serialize};
-use tokio::task;
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::utils::{build_window, parse_identity_id, resolve_event_entities, select_domains};
+use crate::utils::{build_window, parse_identity_id, select_domains};
 
 #[derive(Deserialize)]
 pub struct EventsQuery {
@@ -19,12 +19,35 @@ pub struct EventsQuery {
     pub to: String,
     pub limit: Option<usize>,
     pub identity_id: Option<String>,
+    pub cursor: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ProviderPersonasResponse {
     pub slack: Vec<SlackProviderPersona>,
     pub linear: Vec<LinearProviderPersona>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct WindowBounds {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum TimelineEventsResponse {
+    Snapshot {
+        cursor: u64,
+        window: WindowBounds,
+        events: Vec<EventEnvelope>,
+    },
+    Delta {
+        cursor: u64,
+        window: WindowBounds,
+        added: Vec<EventEnvelope>,
+        removed: Vec<String>,
+    },
 }
 
 pub async fn list_domains() -> impl axum::response::IntoResponse {
@@ -34,7 +57,7 @@ pub async fn list_domains() -> impl axum::response::IntoResponse {
 pub async fn list_events(
     State(state): State<AppState>,
     Query(query): Query<EventsQuery>,
-) -> Result<Json<Vec<EventEnvelope>>, AppError> {
+) -> Result<Json<TimelineEventsResponse>, AppError> {
     let window = build_window(&query.from, &query.to)?;
     let domains = select_domains(query.domains.as_deref(), &state)?;
     let identity_filter = query
@@ -42,26 +65,35 @@ pub async fn list_events(
         .as_deref()
         .map(parse_identity_id)
         .transpose()?;
-    let mut events = Vec::new();
-    for domain in domains {
-        if let Some(adapter) = state.adapters.get(&domain) {
-            let adapter = adapter.clone();
-            let window_clone = window.clone();
-            let mut loaded = task::spawn_blocking(move || adapter.load_events(&window_clone))
-                .await
-                .map_err(|err| anyhow!("adapter task failed: {}", err))??;
-            events.append(&mut loaded);
+    let limit = query.limit.unwrap_or(usize::MAX);
+
+    if let Some(cursor) = query.cursor {
+        let mut delta = state
+            .timeline_cache
+            .delta_since(&domains, &window, cursor)
+            .await?;
+        apply_identity_filter(&mut delta.added, identity_filter);
+        if delta.added.len() > limit {
+            delta.added.truncate(limit);
         }
+        return Ok(Json(TimelineEventsResponse::Delta {
+            cursor: delta.cursor,
+            window: WindowBounds::from(&delta.window),
+            added: delta.added,
+            removed: delta.removed,
+        }));
     }
-    resolve_event_entities(&mut events, state.identity_store.clone()).await;
-    if let Some(identity_id) = identity_filter {
-        events.retain(|event| event.actor_identity_id == Some(identity_id));
+
+    let mut snapshot = state.timeline_cache.snapshot(&domains, &window).await?;
+    apply_identity_filter(&mut snapshot.events, identity_filter);
+    if snapshot.events.len() > limit {
+        snapshot.events.truncate(limit);
     }
-    events.sort_by(|a, b| b.at.cmp(&a.at));
-    if let Some(limit) = query.limit {
-        events.truncate(limit);
-    }
-    Ok(Json(events))
+    Ok(Json(TimelineEventsResponse::Snapshot {
+        cursor: snapshot.cursor,
+        window: WindowBounds::from(&snapshot.window),
+        events: snapshot.events,
+    }))
 }
 
 pub async fn list_provider_personas(
@@ -74,4 +106,19 @@ pub async fn list_provider_personas(
 
 pub async fn fetch_meta(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     Json(state.meta.as_ref().clone())
+}
+
+impl From<&TimeWindow> for WindowBounds {
+    fn from(window: &TimeWindow) -> Self {
+        Self {
+            from: window.start.to_rfc3339(),
+            to: window.end.to_rfc3339(),
+        }
+    }
+}
+
+fn apply_identity_filter(events: &mut Vec<EventEnvelope>, identity_filter: Option<IdentityId>) {
+    if let Some(identity_id) = identity_filter {
+        events.retain(|event| event.actor_identity_id == Some(identity_id));
+    }
 }

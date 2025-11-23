@@ -41,9 +41,32 @@ export interface EventsQuery {
   to: string;
   limit?: number;
   identityId?: string;
+  cursor?: number;
 }
 
-export async function getEvents(params: EventsQuery): Promise<EventEnvelope[]> {
+export interface TimelineWindowResponse {
+  from: string;
+  to: string;
+}
+
+export interface TimelineSnapshotResponse {
+  mode: "snapshot";
+  cursor: number;
+  window: TimelineWindowResponse;
+  events: EventEnvelope[];
+}
+
+export interface TimelineDeltaResponse {
+  mode: "delta";
+  cursor: number;
+  window: TimelineWindowResponse;
+  added: EventEnvelope[];
+  removed: string[];
+}
+
+export type TimelineEventsResponse = TimelineSnapshotResponse | TimelineDeltaResponse;
+
+export async function getEvents(params: EventsQuery): Promise<TimelineEventsResponse> {
   const url = new URL(`${API_ROOT}/api/events`);
   if (params.domains && params.domains.length > 0) {
     url.searchParams.set("domains", params.domains.join(","));
@@ -56,11 +79,14 @@ export async function getEvents(params: EventsQuery): Promise<EventEnvelope[]> {
   if (params.identityId) {
     url.searchParams.set("identity_id", params.identityId);
   }
+  if (typeof params.cursor === "number") {
+    url.searchParams.set("cursor", params.cursor.toString());
+  }
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(await response.text());
   }
-  return (await response.json()) as EventEnvelope[];
+  return (await response.json()) as TimelineEventsResponse;
 }
 
 export async function getOperators(): Promise<OperatorDescriptor[]> {

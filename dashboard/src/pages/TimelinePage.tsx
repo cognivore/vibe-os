@@ -6,7 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { ScrollArea } from "../components/ui/scroll-area";
 import { TimelineEntryList } from "../components/timeline/TimelineEntryList";
 import type { PersonaClickTarget, TimelineEntry } from "../components/timeline/types";
-import { useTimelineWindow, defaultTimelineWindow } from "./timeline/hooks/useTimelineWindow";
+import {
+  useTimelineWindow,
+  defaultTimelineWindow,
+  type TimelineWindowPreset,
+} from "./timeline/hooks/useTimelineWindow";
 import { useDomainSelection } from "./timeline/hooks/useDomainSelection";
 import { useTimelineData } from "./timeline/hooks/useTimelineData";
 import { useThreadSelection } from "./timeline/hooks/useThreadSelection";
@@ -23,6 +27,14 @@ import { threadKey } from "./timeline/threadUtils";
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ss";
 const SEARCH_DEBOUNCE_MS = 700;
 
+const TIMELINE_PRESETS: { label: string; value: TimelineWindowPreset }[] = [
+  { label: "24h", value: "24h" },
+  { label: "72h", value: "72h" },
+  { label: "2w", value: "2w" },
+  { label: "1mo", value: "1mo" },
+  { label: "3mo", value: "3mo" },
+];
+
 export default function TimelinePage() {
   const navigate = useNavigate();
   const dataSource = timelineApiDataSource;
@@ -33,7 +45,7 @@ export default function TimelinePage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const windowState = useTimelineWindow(defaultTimelineWindow());
-  const { window, setFrom, setTo, last24h } = windowState;
+  const { window, setFrom, setTo, preset, selectPreset, reset } = windowState;
 
   const domainState = useDomainSelection(dataSource);
   const timelineState = useTimelineData({
@@ -121,50 +133,25 @@ export default function TimelinePage() {
     clearSearch();
   };
 
-  const [searchThreadEntries, setSearchThreadEntries] = useState<ThreadEntry[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!searchState.results.length) {
-      setSearchThreadEntries([]);
-      return;
-    }
-
-    const buildThreads = async () => {
-      const results = await Promise.all(
-        threadAdapters.map(async (adapter) => {
-          const entries = adapter.buildEntries(searchState.results);
-          return entries instanceof Promise ? await entries : entries;
-        })
-      );
-
-      if (!cancelled) {
-        setSearchThreadEntries(results.flat());
-      }
-    };
-
-    buildThreads();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [searchState.results, threadAdapters]);
-
   const searchEntries = useMemo<TimelineEntry[]>(
     () =>
-      // Search results should only show threads, never individual messages
-      searchThreadEntries.sort(
+      // In search mode, show individual messages that matched the query
+      searchState.results.map((event) => ({
+        type: "event" as const,
+        at: event.at,
+        event,
+      })).sort(
         (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
       ),
-    [searchThreadEntries],
+    [searchState.results],
   );
 
   const hasSearchQuery = searchQuery.trim().length > 0;
   const isSearchMode = hasSearchQuery || searchState.loading;
   const displayEntries: TimelineEntry[] = isSearchMode ? searchEntries : timelineState.entries;
 
-  const displayThreadEntries = isSearchMode ? searchThreadEntries : timelineState.threadEntries;
+  // In search mode, we show individual messages, not threads, so thread selection is disabled
+  const displayThreadEntries = isSearchMode ? [] : timelineState.threadEntries;
 
   const threadState = useThreadSelection({
     adapters: threadAdapters,
@@ -211,28 +198,41 @@ export default function TimelinePage() {
             Events and arrows across all domains
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <label className="flex flex-col text-xs">
-            From
-            <input
-              type="datetime-local"
-              value={format(new Date(window.from), ISO_FORMAT)}
-              onChange={(e) => setFrom(e.target.value)}
-              className="rounded-md border border-input bg-background px-2 py-1 text-sm"
-            />
-          </label>
-          <label className="flex flex-col text-xs">
-            To
-            <input
-              type="datetime-local"
-              value={format(new Date(window.to), ISO_FORMAT)}
-              onChange={(e) => setTo(e.target.value)}
-              className="rounded-md border border-input bg-background px-2 py-1 text-sm"
-            />
-          </label>
-          <Button variant="secondary" onClick={last24h}>
-            Last 24h
-          </Button>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-2">
+            {TIMELINE_PRESETS.map(({ label, value }) => (
+              <Button
+                key={value}
+                variant={preset === value ? "default" : "outline"}
+                onClick={() => selectPreset(value)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <label className="flex flex-col text-xs">
+              From
+              <input
+                type="datetime-local"
+                value={format(new Date(window.from), ISO_FORMAT)}
+                onChange={(e) => setFrom(e.target.value)}
+                className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+              />
+            </label>
+            <label className="flex flex-col text-xs">
+              To
+              <input
+                type="datetime-local"
+                value={format(new Date(window.to), ISO_FORMAT)}
+                onChange={(e) => setTo(e.target.value)}
+                className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+              />
+            </label>
+            <Button variant="ghost" onClick={reset}>
+              Reset
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -310,6 +310,7 @@ export default function TimelinePage() {
               domainLookup={timelineState.domainLookup}
               identityLookup={timelineState.identityLookup}
               personaLookup={timelineState.personaLookup}
+              providerPersonaLabels={timelineState.providerPersonaLabels}
               onPersonaClick={handlePersonaClick}
               onThreadSelect={threadState.selectThread}
               activeThreadKey={activeThreadKey}

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::search::SearchService;
+use crate::timeline_cache::TimelineCache;
 use arrow_store::ArrowStore;
 use core_model::adapters::EventAdapter;
 use core_model::domain::Domain;
@@ -27,6 +28,7 @@ pub struct AppState {
     #[allow(dead_code)]
     pub(crate) linear_api_key: Option<Arc<String>>,
     pub(crate) search: SearchService,
+    pub(crate) timeline_cache: Arc<TimelineCache>,
 }
 
 #[derive(Clone, Serialize)]

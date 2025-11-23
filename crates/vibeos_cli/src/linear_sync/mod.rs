@@ -44,75 +44,90 @@ impl<'a> LinearSync<'a> {
         let comments_path = output_dir.join("comments.jsonl");
         let meta_path = output_dir.join("meta.json");
 
-        let mut issues_by_id = read_existing_issues(&issues_path)?;
-        let mut comments_by_issue = read_existing_comments(&comments_path).unwrap_or_default();
+        let workspace_result = async {
+            let mut issues_by_id = read_existing_issues(&issues_path)?;
+            let mut comments_by_issue = read_existing_comments(&comments_path).unwrap_or_default();
 
-        let last_sync_at = read_last_sync(meta_path.as_path())?;
+            let last_sync_at = read_last_sync(meta_path.as_path())?;
 
-        let mut seen_event_ids = read_existing_event_ids(output_dir)?;
-        let mut pending_events = Vec::new();
-        let mut after: Option<String> = None;
-        let mut workspace_name: Option<String> = None;
+            let mut seen_event_ids = read_existing_event_ids(output_dir)?;
+            let mut pending_events = Vec::new();
+            let mut after: Option<String> = None;
+            let mut workspace_name: Option<String> = None;
 
-        loop {
-            let data: IssuesQueryData = self
-                .client
-                .graphql_query(
-                    ISSUES_QUERY,
-                    serde_json::json!({
-                        "after": after,
-                        "updatedSince": last_sync_at
-                    }),
-                )
-                .await
-                .context("failed to fetch issues page from Linear")?;
+            loop {
+                let data: IssuesQueryData = self
+                    .client
+                    .graphql_query(
+                        ISSUES_QUERY,
+                        serde_json::json!({
+                            "after": after,
+                            "updatedSince": last_sync_at
+                        }),
+                    )
+                    .await
+                    .context("failed to fetch issues page from Linear")?;
 
-            if workspace_name.is_none() {
-                workspace_name = data
-                    .viewer
-                    .and_then(|viewer| viewer.organization.map(|org| org.name));
-            }
+                if workspace_name.is_none() {
+                    workspace_name = data
+                        .viewer
+                        .and_then(|viewer| viewer.organization.map(|org| org.name));
+                }
 
-            for node in data.issues.nodes.into_iter() {
-                let snapshot = LinearIssueSnapshot::from_node(&node);
-                issues_by_id.insert(snapshot.id.clone(), snapshot.clone());
+                for node in data.issues.nodes.into_iter() {
+                    let snapshot = LinearIssueSnapshot::from_node(&node);
+                    issues_by_id.insert(snapshot.id.clone(), snapshot.clone());
 
-                pending_events.extend(collect_new_events(&node, &mut seen_event_ids));
-                for comment in LinearCommentRecord::from_issue_node(&node) {
-                    let entry = comments_by_issue
-                        .entry(comment.issue_id.clone())
-                        .or_default();
-                    if let Some(existing) =
-                        entry.iter_mut().find(|existing| existing.id == comment.id)
-                    {
-                        *existing = comment;
-                    } else {
-                        entry.push(comment);
+                    pending_events.extend(collect_new_events(&node, &mut seen_event_ids));
+                    for comment in LinearCommentRecord::from_issue_node(&node) {
+                        let entry = comments_by_issue
+                            .entry(comment.issue_id.clone())
+                            .or_default();
+                        if let Some(existing) =
+                            entry.iter_mut().find(|existing| existing.id == comment.id)
+                        {
+                            *existing = comment;
+                        } else {
+                            entry.push(comment);
+                        }
                     }
                 }
+
+                if !data.issues.page_info.has_next_page {
+                    break;
+                }
+
+                after = data.issues.page_info.end_cursor;
             }
 
-            if !data.issues.page_info.has_next_page {
-                break;
-            }
+            write_issues(&issues_path, &issues_by_id)?;
+            write_comments(&comments_path, &comments_by_issue)?;
+            append_events_with_rotation(output_dir, &pending_events)?;
 
-            after = data.issues.page_info.end_cursor;
+            let meta = LinearMirrorMeta {
+                last_full_sync_at: Some(Utc::now()),
+                workspace_name,
+            };
+
+            write_meta(&meta_path, &meta)?;
+            Ok::<(), anyhow::Error>(())
         }
+        .await;
 
-        write_issues(&issues_path, &issues_by_id)?;
-        write_comments(&comments_path, &comments_by_issue)?;
-        append_events_with_rotation(output_dir, &pending_events)?;
+        let user_result = self.sync_users(output_dir).await;
 
-        let meta = LinearMirrorMeta {
-            last_full_sync_at: Some(Utc::now()),
-            workspace_name,
-        };
-
-        write_meta(&meta_path, &meta)?;
-
-        self.sync_users(output_dir).await?;
-
-        Ok(())
+        match (workspace_result, user_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(err), Ok(())) => Err(err),
+            (Ok(()), Err(err)) => Err(err),
+            (Err(sync_err), Err(user_err)) => {
+                let user_msg = user_err.to_string();
+                Err::<(), anyhow::Error>(sync_err).context(format!(
+                    "Linear user directory sync also failed: {}",
+                    user_msg
+                ))
+            }
+        }
     }
 
     async fn sync_users(&self, output_dir: &Path) -> Result<()> {
