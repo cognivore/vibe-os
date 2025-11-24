@@ -18,3 +18,7 @@ node_modules/
 
 # Vite build cache
 dashboard/dist/
+
+*.md
+!README.md
+!DESIGN.md

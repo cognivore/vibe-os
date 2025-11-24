@@ -9,6 +9,7 @@ pub struct EasySendYaml {
     pub who: String,
     #[serde(rename = "where")]
     pub where_: Option<String>,
+    pub title: Option<String>,
     pub why: String,
     pub what: String,
     pub priority: Option<i32>,
@@ -18,6 +19,7 @@ pub struct EasySendYaml {
 pub struct EasySendRequest {
     pub assignee: String,
     pub team: String,
+    pub title: Option<String>,
     pub why: String,
     pub what: String,
     pub priority: Option<i32>,
@@ -56,6 +58,7 @@ pub fn parse_easy_send_input(input: &str) -> Result<EasySendRequest> {
         return Ok(EasySendRequest {
             assignee,
             team,
+            title: yaml.title,
             why: yaml.why,
             what: yaml.what,
             priority: yaml.priority,
@@ -106,6 +109,7 @@ fn parse_pipe_format(input: &str) -> Result<EasySendRequest> {
     Ok(EasySendRequest {
         assignee,
         team,
+        title: None,
         why,
         what,
         priority: None,
@@ -364,5 +368,41 @@ what: |
         assert_eq!(result.assignee, "bob");
         assert_eq!(result.team, "OPS");
         assert_eq!(result.priority, None);
+    }
+
+    #[test]
+    fn test_parse_yaml_with_title() {
+        let yaml = r#"
+who: cognivore@NIN
+title: CloudFront cache testing
+why: |
+  We need to validate CloudFront respects IOCAINE traffic-class cache rules.
+  Without this, we risk serving wrong content to users.
+what: |
+  - [ ] Implement automated cache tests
+  - [ ] Verify HIT/MISS behavior
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "cognivore");
+        assert_eq!(result.team, "NIN");
+        assert_eq!(result.title, Some("CloudFront cache testing".to_string()));
+    }
+
+    #[test]
+    fn test_parse_yaml_without_title_autogenerates() {
+        let yaml = r#"
+who: alice@ENG
+why: |
+  This is the first line that should become the title.
+  This is the second line.
+what: |
+  - [ ] Do something
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "alice");
+        assert_eq!(result.team, "ENG");
+        assert_eq!(result.title, None); // Parser doesn't auto-generate, command does
     }
 }

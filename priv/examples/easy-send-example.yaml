@@ -1,5 +1,5 @@
 who: manu@RAD
-priority: 1
+title: Fix hard-coded API credentials in frontend bundle
 why: |
   Bloodmoney API key and base URL are hard-coded in frontend code (searchHits.ts), shipping in every bundle.
   Anyone inspecting DevTools or built assets can extract the key and bypass authentication, defeating the worker proxy protection.

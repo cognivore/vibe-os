@@ -1,5 +1,6 @@
 who: bob
 where: OPS
+title: Performance optimization with verbose format
 priority: 3
 why: |
   Traditional verbose format with separate 'where' field for backward compatibility.

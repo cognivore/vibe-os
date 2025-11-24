@@ -256,16 +256,18 @@ impl CliCommand for LinearCommand {
                 // Compose the description
                 let description = format!("# Why\n\n{}\n\n# What\n\n{}", request.why, request.what);
 
-                // Create a title from the first line of "why"
-                let title = request
-                    .why
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("Untitled issue")
-                    .trim()
-                    .chars()
-                    .take(80)
-                    .collect::<String>();
+                // Use explicit title if provided, otherwise create from first line of "why"
+                let title = request.title.unwrap_or_else(|| {
+                    request
+                        .why
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("Untitled issue")
+                        .trim()
+                        .chars()
+                        .take(80)
+                        .collect::<String>()
+                });
 
                 // Create the issue
                 let api_key = config::linear_api_key()?;
