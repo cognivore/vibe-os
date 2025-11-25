@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::Json;
 use core_model::event::EventEnvelope;
 use core_types::Domain;
 use domain_adapters::SlackAdapter;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
@@ -165,57 +168,81 @@ pub struct ThreadTitlesResponse {
     pub titles: HashMap<String, String>,
 }
 
+/// Maximum number of concurrent thread title lookups
+const MAX_CONCURRENT_TITLE_LOOKUPS: usize = 32;
+
 pub async fn get_thread_titles(
     State(state): State<AppState>,
     Json(request): Json<ThreadTitlesRequest>,
 ) -> Result<Json<ThreadTitlesResponse>, AppError> {
-    let mut titles = HashMap::new();
-    let adapter = SlackAdapter::new(state.slack_mirror_dir.as_ref());
+    let slack_mirror_dir = Arc::new(state.slack_mirror_dir.clone());
+    let state = Arc::new(state);
 
-    for thread_id in request.thread_ids {
-        // Parse thread_id: "channel_id:thread_ts"
-        let parts: Vec<&str> = thread_id.split(':').collect();
-        if parts.len() != 2 {
-            continue;
-        }
-        let channel_id = parts[0];
-        let thread_ts = parts[1].replace('_', ".");
-
-        // Load thread from Slack mirror, fallback to Slack API if needed
-        let events = match adapter.load_thread(channel_id, &thread_ts) {
-            Ok(events) => events,
-            Err(err) => {
-                tracing::debug!(
-                    "Failed to load thread {} from mirror for title lookup: {}",
-                    thread_id,
-                    err
-                );
-                match fetch_thread_via_api_if_possible(
-                    &state,
-                    channel_id,
-                    &thread_ts,
-                    "fetching Slack thread title",
-                )
-                .await
-                {
-                    Ok(events) => events,
-                    Err(api_err) => {
-                        tracing::warn!(
-                            "Unable to fetch Slack thread {} for title lookup: {:?}",
-                            thread_id,
-                            api_err
-                        );
-                        continue;
-                    }
-                }
+    // Process thread titles in parallel with bounded concurrency
+    let results: Vec<Option<(String, String)>> = stream::iter(request.thread_ids)
+        .map(|thread_id| {
+            let slack_mirror_dir = Arc::clone(&slack_mirror_dir);
+            let state = Arc::clone(&state);
+            async move {
+                fetch_single_thread_title(&thread_id, &slack_mirror_dir, &state).await
             }
-        };
+        })
+        .buffer_unordered(MAX_CONCURRENT_TITLE_LOOKUPS)
+        .collect()
+        .await;
 
-        // Find root message where ts == thread_ts
-        if let Some(root_text) = find_root_message_text(&events, &thread_ts) {
-            titles.insert(thread_id, root_text);
-        }
-    }
+    let titles: HashMap<String, String> = results.into_iter().flatten().collect();
 
     Ok(Json(ThreadTitlesResponse { titles }))
+}
+
+async fn fetch_single_thread_title(
+    thread_id: &str,
+    slack_mirror_dir: &Path,
+    state: &AppState,
+) -> Option<(String, String)> {
+    // Parse thread_id: "channel_id:thread_ts"
+    let parts: Vec<&str> = thread_id.split(':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let channel_id = parts[0].to_string();
+    let thread_ts = parts[1].replace('_', ".");
+
+    // Try to load from mirror first (blocking I/O in spawn_blocking)
+    let mirror_dir = slack_mirror_dir.to_path_buf();
+    let channel_id_clone = channel_id.clone();
+    let thread_ts_clone = thread_ts.clone();
+    let mirror_result = tokio::task::spawn_blocking(move || {
+        let adapter = SlackAdapter::new(&mirror_dir);
+        adapter.load_thread(&channel_id_clone, &thread_ts_clone)
+    })
+    .await
+    .ok()
+    .and_then(|r| r.ok());
+
+    let events = match mirror_result {
+        Some(events) => events,
+        None => {
+            // Fallback to Slack API if mirror failed
+            tracing::debug!(
+                "Failed to load thread {} from mirror for title lookup, trying API",
+                thread_id
+            );
+            match fetch_thread_via_api_if_possible(state, &channel_id, &thread_ts, "fetching Slack thread title").await {
+                Ok(events) => events,
+                Err(api_err) => {
+                    tracing::debug!(
+                        "Unable to fetch Slack thread {} for title lookup: {:?}",
+                        thread_id,
+                        api_err
+                    );
+                    return None;
+                }
+            }
+        }
+    };
+
+    // Find root message where ts == thread_ts
+    find_root_message_text(&events, &thread_ts).map(|title| (thread_id.to_string(), title))
 }

@@ -74,6 +74,49 @@ impl LinearClient {
         }
     }
 
+    pub async fn update_issue(
+        &self,
+        issue_id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<LinearIssue> {
+        let mut input = serde_json::json!({});
+
+        if let Some(t) = title {
+            input["title"] = serde_json::json!(t);
+        }
+
+        if let Some(d) = description {
+            input["description"] = serde_json::json!(d);
+        }
+
+        const QUERY: &str = r#"mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
+            issueUpdate(id: $id, input: $input) {
+                issue {
+                    id
+                    identifier
+                    title
+                    url
+                }
+            }
+        }"#;
+
+        let data: serde_json::Value = self
+            .graphql_query(QUERY, serde_json::json!({ "id": issue_id, "input": input }))
+            .await?;
+
+        let issue = data["issueUpdate"]["issue"]
+            .as_object()
+            .context("Missing issue in response")?;
+
+        Ok(LinearIssue {
+            id: issue["id"].as_str().unwrap_or_default().to_string(),
+            identifier: issue["identifier"].as_str().unwrap_or_default().to_string(),
+            title: issue["title"].as_str().unwrap_or_default().to_string(),
+            url: issue["url"].as_str().map(|s| s.to_string()),
+        })
+    }
+
     pub async fn create_issue(
         &self,
         team_id: &str,

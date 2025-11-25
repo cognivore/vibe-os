@@ -66,6 +66,14 @@ The mirror is **incremental and append-only**:
 
 ### Create a Linear Issue
 
+**Easy way (recommended):**
+```bash
+cargo run -- linear easy-send priv/examples/easy-send-example.yaml
+# or from stdin
+cat issue.yaml | cargo run -- linear easy-send
+```
+
+**Verbose way:**
 ```bash
 cargo run -- linear create-issue \
   --team-id <TEAM_UUID> \
@@ -76,6 +84,16 @@ cargo run -- linear create-issue \
 
 Prints the issue identifier and URL on success.
 After installation, invoke `vibeos linear create-issue ...` directly.
+
+### Update a Linear Issue
+
+```bash
+cargo run -- linear easy-update NIN-62 priv/examples/easy-update-example.yaml
+# or from stdin
+cat updates.yaml | cargo run -- linear easy-update FE-115
+```
+
+Uses issue identifier (e.g., NIN-62) instead of UUID. The YAML file should contain `why` and `what` fields, and optionally `title` to update those sections.
 
 ### Mirror Linear
 

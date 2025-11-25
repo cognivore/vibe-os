@@ -1,0 +1,9 @@
+title: Updated title goes here (optional)
+why: |
+  Updated business context and justification.
+  Explain what changed or what new information you have.
+what: |
+  - [x] Completed task from original issue
+  - [ ] New task based on updated understanding
+  - [ ] Another new actionable item
+

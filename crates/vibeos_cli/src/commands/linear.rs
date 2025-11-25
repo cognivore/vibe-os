@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use clap::Subcommand;
@@ -32,9 +32,6 @@ pub enum LinearCommand {
         /// Optional numeric priority (0..4)
         #[arg(long)]
         priority: Option<i32>,
-        /// Optional assignee ID (UUID-like string)
-        #[arg(long)]
-        assignee_id: Option<String>,
     },
     /// Full sync of Linear workspace issues and history to local disk
     Sync {
@@ -92,6 +89,25 @@ pub enum LinearCommand {
         /// Path to YAML file (if not provided, reads from stdin)
         file: Option<PathBuf>,
     },
+    /// Update an existing Linear issue
+    UpdateIssue {
+        /// Issue ID (UUID)
+        #[arg(long)]
+        issue_id: String,
+        /// New title (optional)
+        #[arg(long)]
+        title: Option<String>,
+        /// New description (optional)
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Update issue from YAML file using issue identifier (e.g., NIN-62)
+    EasyUpdate {
+        /// Issue identifier (e.g., NIN-62, FE-115)
+        identifier: String,
+        /// Path to YAML file with why/what sections
+        file: Option<PathBuf>,
+    },
 }
 
 #[async_trait]
@@ -103,18 +119,11 @@ impl CliCommand for LinearCommand {
                 title,
                 description,
                 priority,
-                assignee_id,
             } => {
                 let api_key = config::linear_api_key()?;
                 let client = linear::LinearClient::new(api_key);
                 let issue = client
-                    .create_issue(
-                        team_id,
-                        title,
-                        description,
-                        *priority,
-                        assignee_id.as_deref(),
-                    )
+                    .create_issue(team_id, title, description, *priority, None)
                     .await?;
 
                 println!("Created issue {} (id={})", issue.identifier, issue.id);
@@ -288,6 +297,68 @@ impl CliCommand for LinearCommand {
                 }
                 println!("  Team: {}", request.team);
                 println!("  Assignee: {}", request.assignee);
+
+                Ok(())
+            }
+            LinearCommand::UpdateIssue {
+                issue_id,
+                title,
+                description,
+            } => {
+                let api_key = config::linear_api_key()?;
+                let client = linear::LinearClient::new(api_key);
+
+                let issue = client
+                    .update_issue(issue_id, title.as_deref(), description.as_deref())
+                    .await?;
+
+                println!("Updated issue {} (id={})", issue.identifier, issue.id);
+                if let Some(url) = issue.url {
+                    println!("  URL: {}", url);
+                }
+                Ok(())
+            }
+            LinearCommand::EasyUpdate { identifier, file } => {
+                let cfg = ctx.config()?;
+
+                // Load issues to find the ID from identifier
+                let issues = linear_analysis::load_issues(&cfg.linear_mirror_dir)?;
+                let issue = issues
+                    .iter()
+                    .find(|i| i.identifier == *identifier)
+                    .context(format!("Issue {} not found in mirror", identifier))?;
+
+                // Read input from file or stdin
+                let input = easy_send::read_input_from_file_or_stdin(file.as_deref())?;
+
+                // Parse YAML to get why/what
+                let yaml: serde_yaml::Value = serde_yaml::from_str(&input)
+                    .context("Failed to parse YAML")?;
+
+                let why = yaml["why"]
+                    .as_str()
+                    .context("Missing 'why' field")?
+                    .trim();
+                let what = yaml["what"]
+                    .as_str()
+                    .context("Missing 'what' field")?
+                    .trim();
+                let title = yaml["title"].as_str();
+
+                // Compose the description
+                let description = format!("# Why\n\n{}\n\n# What\n\n{}", why, what);
+
+                // Update the issue
+                let api_key = config::linear_api_key()?;
+                let client = linear::LinearClient::new(api_key);
+                let updated = client
+                    .update_issue(&issue.id, title, Some(&description))
+                    .await?;
+
+                println!("Updated issue {} (id={})", updated.identifier, updated.id);
+                if let Some(url) = updated.url {
+                    println!("  URL: {}", url);
+                }
 
                 Ok(())
             }

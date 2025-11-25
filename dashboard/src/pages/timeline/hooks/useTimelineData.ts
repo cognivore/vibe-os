@@ -46,7 +46,8 @@ export function useTimelineData({
   const [arrows, setArrows] = useState<Arrow[]>([]);
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [providerPersonaLabels, setProviderPersonaLabels] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(false);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [threadBuildingLoading, setThreadBuildingLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const renderCountRef = useRef(0);
@@ -104,7 +105,7 @@ export function useTimelineData({
 
   useEffect(() => {
     if (!stableDomains.length) {
-      setLoading(false);
+      setEventsLoading(false);
       setArrows([]);
       setError(null);
     }
@@ -169,18 +170,18 @@ export function useTimelineData({
 
   useEffect(() => {
     if (!stableDomains.length) {
-      setLoading(false);
+      setEventsLoading(false);
       return;
     }
     if (matchesSelection) {
-      setLoading(false);
+      setEventsLoading(false);
       return;
     }
     if (snapshotInFlightRef.current === snapshotKey) return;
 
     let cancelled = false;
     snapshotInFlightRef.current = snapshotKey;
-    setLoading(true);
+    setEventsLoading(true);
     setError(null);
 
     dataSource
@@ -204,7 +205,7 @@ export function useTimelineData({
       })
       .finally(() => {
         if (!cancelled) {
-          setLoading(false);
+          setEventsLoading(false);
         }
         snapshotInFlightRef.current = null;
       });
@@ -216,25 +217,25 @@ export function useTimelineData({
 
   useEffect(() => {
     if (!stableDomains.length) {
-      setLoading(false);
+      setEventsLoading(false);
       return;
     }
     if (!matchesSelection) {
       return;
     }
     if (cacheCursor == null) {
-      setLoading(false);
+      setEventsLoading(false);
       return;
     }
     const deltaKey = `${snapshotKey}:${cacheCursor}`;
     if (deltaFetchedRef.current === deltaKey || deltaInFlightRef.current === deltaKey) {
-      setLoading(false);
+      setEventsLoading(false);
       return;
     }
 
     let cancelled = false;
     deltaInFlightRef.current = deltaKey;
-    setLoading(true);
+    setEventsLoading(true);
     setError(null);
 
     dataSource
@@ -267,7 +268,7 @@ export function useTimelineData({
       })
       .finally(() => {
         if (!cancelled) {
-          setLoading(false);
+          setEventsLoading(false);
         }
         deltaInFlightRef.current = null;
       });
@@ -282,6 +283,15 @@ export function useTimelineData({
   useEffect(() => {
     let cancelled = false;
 
+    // Skip loading state if there are no events to process
+    if (cachedEvents.length === 0) {
+      setThreadEntries([]);
+      setThreadBuildingLoading(false);
+      return;
+    }
+
+    setThreadBuildingLoading(true);
+
     const buildThreads = async () => {
       const results = await Promise.all(
         threadAdapters.map(async (adapter) => {
@@ -292,10 +302,16 @@ export function useTimelineData({
 
       if (!cancelled) {
         setThreadEntries(results.flat());
+        setThreadBuildingLoading(false);
       }
     };
 
-    buildThreads();
+    buildThreads().catch((err) => {
+      if (!cancelled) {
+        console.error("Failed to build thread entries:", err);
+        setThreadBuildingLoading(false);
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -339,6 +355,8 @@ export function useTimelineData({
     });
     return map;
   }, [identities]);
+
+  const loading = eventsLoading || threadBuildingLoading;
 
   return {
     loading,

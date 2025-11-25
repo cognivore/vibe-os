@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Button } from "../../../components/ui/button";
-import { getThreadTitles } from "../../../api/client";
 import {
   SlackEventBody,
   SlackMessageLinks,
@@ -29,7 +28,7 @@ export const slackThreadAdapter: ThreadAdapter<SlackThreadEntry> = {
   Panel: SlackThreadPanel,
 };
 
-async function buildSlackThreadEntries(events: EventEnvelope[]): Promise<SlackThreadEntry[]> {
+function buildSlackThreadEntries(events: EventEnvelope[]): SlackThreadEntry[] {
   const map = new Map<string, { channelId?: string; messages: EventEnvelope[] }>();
   events
     .filter((event) => event.domain === "slack")
@@ -54,7 +53,7 @@ async function buildSlackThreadEntries(events: EventEnvelope[]): Promise<SlackTh
       map.get(threadKey)!.messages.push(event);
     });
 
-  const entries = Array.from(map.entries())
+  return Array.from(map.entries())
     .filter(([, { messages }]) => messages.length > 0)
     .map(([threadId, { channelId, messages }]) => {
       const sorted = [...messages].sort(
@@ -73,6 +72,12 @@ async function buildSlackThreadEntries(events: EventEnvelope[]): Promise<SlackTh
         }) ?? sorted[0];
       const replies = sorted.filter((msg) => msg !== root);
       const latestAt = sorted[sorted.length - 1]?.at ?? root.at;
+      // Use root message text as thread title (truncated), fallback to channel ID
+      const rootData = root.data as SlackEventData;
+      const rootText = typeof rootData.text === "string" ? rootData.text.trim() : undefined;
+      const threadTitle = rootText && rootText.length > 0
+        ? (rootText.length > 100 ? rootText.slice(0, 100) + "…" : rootText)
+        : undefined;
       return {
         type: "slack_thread" as const,
         threadId,
@@ -80,25 +85,9 @@ async function buildSlackThreadEntries(events: EventEnvelope[]): Promise<SlackTh
         root,
         replies,
         at: latestAt,
+        threadTitle,
       };
     });
-
-  // Fetch thread titles from backend in batch
-  const threadIds = entries.map((entry) => entry.threadId);
-  let titles: Record<string, string> = {};
-  if (threadIds.length > 0) {
-    try {
-      titles = await getThreadTitles(threadIds);
-    } catch (error) {
-      console.error("Failed to fetch thread titles:", error);
-    }
-  }
-
-  // Apply titles to entries
-  return entries.map((entry) => ({
-    ...entry,
-    threadTitle: titles[entry.threadId],
-  }));
 }
 
 async function hydrateSlackThread(
