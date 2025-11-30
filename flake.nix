@@ -93,6 +93,10 @@
               shellcheck
               shfmt
 
+              # TUI and Python for linear-report
+              gum
+              (python311.withPackages (ps: with ps; [ requests textual ]))
+
               # Golang for cloud compute
               go
 

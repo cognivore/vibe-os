@@ -22,3 +22,5 @@ dashboard/dist/
 *.md
 !README.md
 !DESIGN.md
+
+*.txt
