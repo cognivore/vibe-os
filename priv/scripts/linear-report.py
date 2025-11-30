@@ -85,6 +85,14 @@ class Cycle:
 
 
 @dataclass
+@dataclass
+class HistoryEvent:
+    created_at: Optional[datetime]
+    from_cycle_number: Optional[int]
+    to_cycle_number: Optional[int]
+
+
+@dataclass
 class Issue:
     id: str
     identifier: str
@@ -103,6 +111,8 @@ class Issue:
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime]
+    history: list[HistoryEvent] = field(default_factory=list)
+    late_added_at: Optional[datetime] = None
 
     @property
     def is_planned(self) -> bool:
@@ -170,6 +180,14 @@ class CycleWithIssues:
     def completion_pct(self) -> int:
         return (self.done_count * 100 // self.total) if self.total > 0 else 0
 
+    @property
+    def late_issues(self) -> list[Issue]:
+        return [i for i in self.issues if i.late_added_at]
+
+    @property
+    def late_count(self) -> int:
+        return len(self.late_issues)
+
 
 @dataclass
 class TeamReport:
@@ -201,6 +219,16 @@ class TeamReport:
             + len(self.unplanned_backlog)
             + len(self.unplanned_done)
         )
+
+    @property
+    def total_late_additions(self) -> int:
+        total = 0
+        for bucket in (self.previous_cycle, self.current_cycle):
+            if bucket:
+                total += bucket.late_count
+        for c in self.upcoming_cycles:
+            total += c.late_count
+        return total
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -269,6 +297,13 @@ class LinearClient:
                     labels { nodes { name } }
                     priority
                     cycle { number startsAt endsAt }
+                    history(first: 200) {
+                        nodes {
+                            createdAt
+                            fromCycle { number startsAt }
+                            toCycle { number startsAt }
+                        }
+                    }
                     createdAt updatedAt completedAt
                 }
                 pageInfo { hasNextPage endCursor }
@@ -281,6 +316,23 @@ class LinearClient:
             data = self.graphql(query, {"after": after})
             for node in data["issues"]["nodes"]:
                 cycle = node.get("cycle")
+                history_nodes = node.get("history", {}).get("nodes", [])
+                history = [
+                    HistoryEvent(
+                        created_at=parse_datetime(h["createdAt"]),
+                        from_cycle_number=(
+                            h.get("fromCycle", {}).get("number")
+                            if h.get("fromCycle")
+                            else None
+                        ),
+                        to_cycle_number=(
+                            h.get("toCycle", {}).get("number")
+                            if h.get("toCycle")
+                            else None
+                        ),
+                    )
+                    for h in history_nodes
+                ]
                 issues.append(
                     Issue(
                         id=node["id"],
@@ -316,6 +368,7 @@ class LinearClient:
                         created_at=parse_datetime(node["createdAt"]),
                         updated_at=parse_datetime(node["updatedAt"]),
                         completed_at=parse_datetime(node.get("completedAt")),
+                        history=history,
                     )
                 )
             if not data["issues"]["pageInfo"]["hasNextPage"]:
@@ -336,6 +389,25 @@ def parse_datetime(value: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def compute_late_added_at(issue: Issue, cycle: Cycle) -> Optional[datetime]:
+    """Determine if issue joined given cycle after the start date."""
+    if not cycle.starts_at:
+        return None
+    additions = sorted(
+        [
+            evt.created_at
+            for evt in issue.history
+            if evt.to_cycle_number == cycle.number and evt.created_at is not None
+        ]
+    )
+    if not additions:
+        return None
+    added_at = additions[0]
+    if added_at and added_at > cycle.starts_at:
+        return added_at
+    return None
 
 
 def get_team_cycles(
@@ -378,7 +450,11 @@ def build_team_reports(
         def make_cycle_with_issues(cycle: Optional[Cycle]) -> Optional[CycleWithIssues]:
             if not cycle:
                 return None
-            cycle_issues = [i for i in team_issues if i.cycle_number == cycle.number]
+            cycle_issues = []
+            for item in team_issues:
+                if item.cycle_number == cycle.number:
+                    item.late_added_at = compute_late_added_at(item, cycle)
+                    cycle_issues.append(item)
             return CycleWithIssues(cycle=cycle, issues=cycle_issues)
 
         prev_cwi = make_cycle_with_issues(previous_cycle)
@@ -512,7 +588,7 @@ def run_tui(reports: list[TeamReport], workspace_name: str):
                 lines = []
                 lines.append(f"[bold underline]{report.team.name}[/bold underline]")
                 lines.append(
-                    f"Planned: {report.total_planned} | Unplanned: {report.total_unplanned}"
+                    f"Planned: {report.total_planned} | Late additions: {report.total_late_additions} | Unplanned: {report.total_unplanned}"
                 )
                 lines.append("─" * 40)
 
@@ -526,15 +602,35 @@ def run_tui(reports: list[TeamReport], workspace_name: str):
                         f"[bold]Cycle {c.number}[/bold] {status_icon} {c.status.title()} ({c.date_range})"
                     )
                     lines.append(
-                        f"  {cwi.completion_pct}% complete | ✓{cwi.done_count} →{cwi.in_progress_count} ○{cwi.todo_count}"
+                        f"  {cwi.completion_pct}% complete | ✓{cwi.done_count} →{cwi.in_progress_count} ○{cwi.todo_count} | Late: {cwi.late_count}"
                     )
                     for issue in cwi.issues[:10]:
                         assignee = issue.assignee_name or "Unassigned"
+                        late_tag = " [LATE]" if issue.late_added_at else ""
                         lines.append(
-                            f"  {issue.state_icon} [{issue.identifier}] {issue.title[:40]}{'...' if len(issue.title) > 40 else ''}"
+                            f"  {issue.state_icon} [{issue.identifier}] {issue.title[:40]}{'...' if len(issue.title) > 40 else ''}{late_tag}"
                         )
                     if len(cwi.issues) > 10:
                         lines.append(f"  ... and {len(cwi.issues) - 10} more")
+                    if cwi.late_issues:
+                        latest = sorted(
+                            cwi.late_issues,
+                            key=lambda i: i.late_added_at or datetime.max,
+                        )[:5]
+                        lines.append("  ⚠ Late additions:")
+                        for issue in latest:
+                            when = (
+                                issue.late_added_at.strftime("%b %d %H:%M")
+                                if issue.late_added_at
+                                else "unknown"
+                            )
+                            lines.append(
+                                f"    [{issue.identifier}] {issue.title[:45]} (added {when})"
+                            )
+                        if cwi.late_count > len(latest):
+                            lines.append(
+                                f"    ... and {cwi.late_count - len(latest)} more late issues"
+                            )
                     lines.append("─" * 40)
 
                 # Previous cycle
@@ -549,6 +645,12 @@ def run_tui(reports: list[TeamReport], workspace_name: str):
                 for cwi in report.upcoming_cycles:
                     if cwi.total > 0:
                         render_cycle(cwi, "Upcoming", "cyan")
+
+                if report.total_late_additions:
+                    lines.append(
+                        f"\n[bold red]⚠ Total late additions this team: {report.total_late_additions}[/bold red]"
+                    )
+                    lines.append("─" * 40)
 
                 # Unplanned active
                 if report.unplanned_active:
@@ -773,7 +875,9 @@ def render_txt(reports: list[TeamReport], workspace_name: str, output_path: Path
     for report in reports:
         add("-" * 80)
         add(f"TEAM: {report.team.name}")
-        add(f"Planned: {report.total_planned} | Unplanned: {report.total_unplanned}")
+        add(
+            f"Planned: {report.total_planned} | Late additions: {report.total_late_additions} | Unplanned: {report.total_unplanned}"
+        )
         add("-" * 80)
         add()
 
@@ -786,26 +890,52 @@ def render_txt(reports: list[TeamReport], workspace_name: str, output_path: Path
                 c = cwi.cycle
                 add(f"  {label}: Cycle {c.number} ({c.date_range}) - {c.status}")
                 add(
-                    f"    {cwi.completion_pct}% complete | Done: {cwi.done_count} | In Progress: {cwi.in_progress_count} | Todo: {cwi.todo_count}"
+                    f"    {cwi.completion_pct}% complete | Done: {cwi.done_count} | In Progress: {cwi.in_progress_count} | Todo: {cwi.todo_count} | Late: {cwi.late_count}"
                 )
                 add()
                 for issue in cwi.issues:
-                    add(f"    {issue.state_icon} [{issue.identifier}] {issue.title}")
+                    late_tag = " [LATE]" if issue.late_added_at else ""
+                    add(
+                        f"    {issue.state_icon} [{issue.identifier}] {issue.title}{late_tag}"
+                    )
                     add(f"      URL: {issue.url}")
                     add(
                         f"      Assignee: {issue.assignee_name or 'Unassigned'} | State: {issue.state_name}"
                     )
                 add()
+                if cwi.late_issues:
+                    add("    Late additions:")
+                    for issue in cwi.late_issues:
+                        when = (
+                            issue.late_added_at.strftime("%Y-%m-%d %H:%M")
+                            if issue.late_added_at
+                            else "unknown"
+                        )
+                        add(f"      [{issue.identifier}] {issue.title} (added {when})")
+                    add()
 
         for cwi in report.upcoming_cycles:
             if cwi.total > 0:
                 c = cwi.cycle
                 add(f"  UPCOMING: Cycle {c.number} ({c.date_range})")
-                add(f"    Todo: {cwi.todo_count}")
+                add(f"    Todo: {cwi.todo_count} | Late so far: {cwi.late_count}")
                 for issue in cwi.issues:
-                    add(f"    {issue.state_icon} [{issue.identifier}] {issue.title}")
+                    late_tag = " [LATE]" if issue.late_added_at else ""
+                    add(
+                        f"    {issue.state_icon} [{issue.identifier}] {issue.title}{late_tag}"
+                    )
                     add(f"      URL: {issue.url}")
                 add()
+                if cwi.late_issues:
+                    add("    Late additions:")
+                    for issue in cwi.late_issues:
+                        when = (
+                            issue.late_added_at.strftime("%Y-%m-%d %H:%M")
+                            if issue.late_added_at
+                            else "unknown"
+                        )
+                        add(f"      [{issue.identifier}] {issue.title} (added {when})")
+                    add()
 
         # Unplanned
         if report.unplanned_active:
@@ -856,7 +986,7 @@ def render_md(reports: list[TeamReport], workspace_name: str, output_path: Path)
         add(f"## {report.team.name}")
         add()
         add(
-            f"**Planned:** {report.total_planned} | **Unplanned:** {report.total_unplanned}"
+            f"**Planned:** {report.total_planned} | **Late additions:** {report.total_late_additions} | **Unplanned:** {report.total_unplanned}"
         )
         add()
 
@@ -872,31 +1002,41 @@ def render_md(reports: list[TeamReport], workspace_name: str, output_path: Path)
                 add(f"### {label}: Cycle {c.number} {status_emoji} ({c.date_range})")
                 add()
                 add(
-                    f"**{cwi.completion_pct}% complete** | Done: {cwi.done_count} | In Progress: {cwi.in_progress_count} | Todo: {cwi.todo_count}"
+                    f"**{cwi.completion_pct}% complete** | Done: {cwi.done_count} | In Progress: {cwi.in_progress_count} | Todo: {cwi.todo_count} | Late: {cwi.late_count}"
                 )
                 add()
-                add("| Status | ID | Title | Assignee |")
-                add("|--------|-----|-------|----------|")
+                add("| Status | ID | Title | Assignee | Late Added |")
+                add("|--------|-----|-------|----------|------------|")
                 for issue in cwi.issues:
                     title_link = f"[{issue.title[:35]}{'...' if len(issue.title) > 35 else ''}]({issue.url})"
                     add(
-                        f"| {issue.state_icon} | {issue.identifier} | {title_link} | {issue.assignee_name or 'Unassigned'} |"
+                        f"| {issue.state_icon} | {issue.identifier} | {title_link} | {issue.assignee_name or 'Unassigned'} | {issue.late_added_at.strftime('%Y-%m-%d') if issue.late_added_at else ''} |"
                     )
                 add()
+                if cwi.late_issues:
+                    add(
+                        f"*Late additions:* {', '.join(i.identifier for i in cwi.late_issues)}"
+                    )
+                    add()
 
         for cwi in report.upcoming_cycles:
             if cwi.total > 0:
                 c = cwi.cycle
                 add(f"### Upcoming: Cycle {c.number} 📅 ({c.date_range})")
                 add()
-                add("| Status | ID | Title | Assignee |")
-                add("|--------|-----|-------|----------|")
+                add("| Status | ID | Title | Assignee | Late Added |")
+                add("|--------|-----|-------|----------|------------|")
                 for issue in cwi.issues:
                     title_link = f"[{issue.title[:35]}{'...' if len(issue.title) > 35 else ''}]({issue.url})"
                     add(
-                        f"| {issue.state_icon} | {issue.identifier} | {title_link} | {issue.assignee_name or 'Unassigned'} |"
+                        f"| {issue.state_icon} | {issue.identifier} | {title_link} | {issue.assignee_name or 'Unassigned'} | {issue.late_added_at.strftime('%Y-%m-%d') if issue.late_added_at else ''} |"
                     )
                 add()
+                if cwi.late_issues:
+                    add(
+                        f"*Late additions:* {', '.join(i.identifier for i in cwi.late_issues)}"
+                    )
+                    add()
 
         if report.unplanned_active:
             add(f"### ⚠️ Unplanned Active ({len(report.unplanned_active)} issues)")
