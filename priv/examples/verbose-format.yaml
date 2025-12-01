@@ -9,6 +9,9 @@ what: |
   - [ ] Implement optimization
   - [ ] Run benchmarks
   - [ ] Document findings
+# Optional: specify cycle (number or name)
+# cycle: 2
+# cycle: "Sprint 42"
 # Optional: specify dependencies using issue identifiers
 # dependencies:
 #   - NIN-70

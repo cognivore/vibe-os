@@ -123,7 +123,7 @@ impl CliCommand for LinearCommand {
                 let api_key = config::linear_api_key()?;
                 let client = linear::LinearClient::new(api_key);
                 let issue = client
-                    .create_issue(team_id, title, description, *priority, None)
+                    .create_issue(team_id, title, description, *priority, None, None)
                     .await?;
 
                 println!("Created issue {} (id={})", issue.identifier, issue.id);
@@ -266,6 +266,13 @@ impl CliCommand for LinearCommand {
                 let dependencies =
                     easy_send::match_issue_identifiers(&request.dependencies, &issues)?;
 
+                // Match cycle if specified (must be for the same team)
+                let cycle_id = request
+                    .cycle
+                    .as_ref()
+                    .map(|spec| easy_send::match_cycle(spec, &team_id, &issues))
+                    .transpose()?;
+
                 // Compose the description
                 let description = format!("# Why\n\n{}\n\n# What\n\n{}", request.why, request.what);
 
@@ -292,6 +299,7 @@ impl CliCommand for LinearCommand {
                         &description,
                         request.priority,
                         Some(&assignee_id),
+                        cycle_id.as_deref(),
                     )
                     .await?;
 
@@ -301,11 +309,14 @@ impl CliCommand for LinearCommand {
                 }
                 println!("  Team: {}", request.team);
                 println!("  Assignee: {}", request.assignee);
+                if let Some(ref spec) = request.cycle {
+                    println!("  Cycle: {:?}", spec);
+                }
 
                 // Create dependency relations: the dependency issue blocks the new issue
                 for (identifier, dep_issue_id) in &dependencies {
                     client
-                        .create_issue_relation(&dep_issue_id, &issue.id)
+                        .create_issue_relation(dep_issue_id, &issue.id)
                         .await
                         .with_context(|| format!("Failed to add dependency on {}", identifier))?;
                     println!("  Dependency: {} (blocks this issue)", identifier);

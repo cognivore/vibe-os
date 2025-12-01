@@ -16,6 +16,16 @@ pub struct EasySendYaml {
     /// List of issue identifiers (e.g., NIN-70, DAT-16) that this issue depends on
     #[serde(default)]
     pub dependencies: Vec<String>,
+    /// Cycle number (e.g., 42) or name (e.g., "Sprint 42")
+    pub cycle: Option<CycleSpec>,
+}
+
+/// Cycle specification - can be either a number or a name string
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum CycleSpec {
+    Number(i32),
+    Name(String),
 }
 
 #[derive(Debug)]
@@ -28,6 +38,8 @@ pub struct EasySendRequest {
     pub priority: Option<i32>,
     /// Issue identifiers (e.g., NIN-70) that this issue depends on
     pub dependencies: Vec<String>,
+    /// Cycle specification (number or name)
+    pub cycle: Option<CycleSpec>,
 }
 
 /// Parse input from either YAML file or stdin pipe format
@@ -68,6 +80,7 @@ pub fn parse_easy_send_input(input: &str) -> Result<EasySendRequest> {
             what: yaml.what,
             priority: yaml.priority,
             dependencies: yaml.dependencies,
+            cycle: yaml.cycle,
         });
     }
 
@@ -120,6 +133,7 @@ fn parse_pipe_format(input: &str) -> Result<EasySendRequest> {
         what,
         priority: None,
         dependencies: Vec::new(),
+        cycle: None,
     })
 }
 
@@ -232,6 +246,121 @@ pub fn match_team(team_key: &str, issues: &[LinearIssueSnapshot]) -> Result<Stri
     }
 
     Ok(matches[0].1.to_string())
+}
+
+/// Match cycle specification (number or name) to cycle ID from Linear mirror
+/// Filters cycles to only those belonging to the specified team
+pub fn match_cycle(
+    cycle_spec: &CycleSpec,
+    team_id: &str,
+    issues: &[LinearIssueSnapshot],
+) -> Result<String> {
+    // Collect unique cycle mappings from issues for the specified team
+    let mut cycles: Vec<(Option<i32>, Option<&str>, &str)> = Vec::new();
+
+    for issue in issues {
+        // Only consider cycles from the target team
+        if issue.team_id.as_deref() != Some(team_id) {
+            continue;
+        }
+        if let Some(ref cycle_id) = issue.cycle_id {
+            let entry = (
+                issue.cycle_number,
+                issue.cycle_name.as_deref(),
+                cycle_id.as_str(),
+            );
+            if !cycles.iter().any(|(_, _, id)| *id == cycle_id) {
+                cycles.push(entry);
+            }
+        }
+    }
+
+    if cycles.is_empty() {
+        bail!("No cycles found for this team in Linear mirror. Run `linear sync` first?");
+    }
+
+    match cycle_spec {
+        CycleSpec::Number(num) => {
+            let matching: Vec<_> = cycles
+                .iter()
+                .filter(|(n, _, _)| *n == Some(*num))
+                .collect();
+
+            if matching.is_empty() {
+                let available: Vec<String> = cycles
+                    .iter()
+                    .filter_map(|(n, name, _)| {
+                        n.map(|num| {
+                            if let Some(name) = name {
+                                format!("{} ({})", num, name)
+                            } else {
+                                num.to_string()
+                            }
+                        })
+                    })
+                    .collect();
+                bail!(
+                    "Cycle {} not found. Available cycles: {}",
+                    num,
+                    available.join(", ")
+                );
+            }
+
+            Ok(matching[0].2.to_string())
+        }
+        CycleSpec::Name(name) => {
+            let needle = name.to_lowercase();
+            let matching: Vec<_> = cycles
+                .iter()
+                .filter(|(_, n, _)| {
+                    n.map(|s| s.to_lowercase().contains(&needle))
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            if matching.is_empty() {
+                let available: Vec<String> = cycles
+                    .iter()
+                    .filter_map(|(num, name, _)| {
+                        name.map(|n| {
+                            if let Some(num) = num {
+                                format!("{} ({})", n, num)
+                            } else {
+                                n.to_string()
+                            }
+                        })
+                    })
+                    .collect();
+                bail!(
+                    "Cycle '{}' not found. Available cycles: {}",
+                    name,
+                    available.join(", ")
+                );
+            }
+
+            if matching.len() > 1 {
+                let names: Vec<String> = matching
+                    .iter()
+                    .filter_map(|(num, name, _)| {
+                        name.map(|n| {
+                            if let Some(num) = num {
+                                format!("{} ({})", n, num)
+                            } else {
+                                n.to_string()
+                            }
+                        })
+                    })
+                    .collect();
+                bail!(
+                    "Ambiguous cycle '{}'. Matches: {}",
+                    name,
+                    names.join(", ")
+                );
+            }
+
+            Ok(matching[0].2.to_string())
+        }
+    }
 }
 
 /// Match issue identifiers (e.g., NIN-70, DAT-16) to issue IDs
@@ -484,5 +613,58 @@ what: |
         assert_eq!(result.assignee, "bob");
         assert_eq!(result.team, "OPS");
         assert!(result.dependencies.is_empty());
+    }
+
+    #[test]
+    fn test_parse_yaml_with_cycle_number() {
+        let yaml = r#"
+who: cognivore@NIN
+cycle: 42
+why: |
+  Task for sprint 42.
+what: |
+  - [ ] Do something
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "cognivore");
+        assert_eq!(result.team, "NIN");
+        assert!(matches!(result.cycle, Some(CycleSpec::Number(42))));
+    }
+
+    #[test]
+    fn test_parse_yaml_with_cycle_name() {
+        let yaml = r#"
+who: cognivore@NIN
+cycle: "Sprint 42"
+why: |
+  Task for Sprint 42.
+what: |
+  - [ ] Do something
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "cognivore");
+        assert_eq!(result.team, "NIN");
+        match &result.cycle {
+            Some(CycleSpec::Name(name)) => assert_eq!(name, "Sprint 42"),
+            _ => panic!("Expected CycleSpec::Name"),
+        }
+    }
+
+    #[test]
+    fn test_parse_yaml_without_cycle() {
+        let yaml = r#"
+who: bob@OPS
+why: |
+  Task without cycle.
+what: |
+  - [ ] Do something
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "bob");
+        assert_eq!(result.team, "OPS");
+        assert!(result.cycle.is_none());
     }
 }
