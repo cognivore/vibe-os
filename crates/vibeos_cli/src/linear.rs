@@ -16,6 +16,18 @@ const ISSUE_CREATE_MUTATION: &str = r#"
     }
 "#;
 
+const ISSUE_RELATION_CREATE_MUTATION: &str = r#"
+    mutation IssueRelationCreate($input: IssueRelationCreateInput!) {
+        issueRelationCreate(input: $input) {
+            success
+            issueRelation {
+                id
+                type
+            }
+        }
+    }
+"#;
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LinearIssue {
     pub id: String,
@@ -115,6 +127,37 @@ impl LinearClient {
             title: issue["title"].as_str().unwrap_or_default().to_string(),
             url: issue["url"].as_str().map(|s| s.to_string()),
         })
+    }
+
+    /// Create an issue relation (dependency)
+    /// When `issue_id` depends on `related_issue_id`, create a "blocked_by" relation
+    pub async fn create_issue_relation(
+        &self,
+        issue_id: &str,
+        related_issue_id: &str,
+    ) -> Result<()> {
+        let input = serde_json::json!({
+            "issueId": issue_id,
+            "relatedIssueId": related_issue_id,
+            "type": "blocks"
+        });
+
+        let data: serde_json::Value = self
+            .graphql_query(
+                ISSUE_RELATION_CREATE_MUTATION,
+                serde_json::json!({ "input": input }),
+            )
+            .await?;
+
+        let success = data["issueRelationCreate"]["success"]
+            .as_bool()
+            .unwrap_or(false);
+
+        if !success {
+            anyhow::bail!("issueRelationCreate returned success=false");
+        }
+
+        Ok(())
     }
 
     pub async fn create_issue(

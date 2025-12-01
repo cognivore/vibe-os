@@ -9,3 +9,7 @@ what: |
   - [ ] Implement optimization
   - [ ] Run benchmarks
   - [ ] Document findings
+# Optional: specify dependencies using issue identifiers
+# dependencies:
+#   - NIN-70
+#   - DAT-16

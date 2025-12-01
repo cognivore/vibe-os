@@ -262,6 +262,10 @@ impl CliCommand for LinearCommand {
                 let assignee_id = easy_send::match_assignee(&request.assignee, &issues)?;
                 let team_id = easy_send::match_team(&request.team, &issues)?;
 
+                // Match dependency identifiers to IDs (validate before creating issue)
+                let dependencies =
+                    easy_send::match_issue_identifiers(&request.dependencies, &issues)?;
+
                 // Compose the description
                 let description = format!("# Why\n\n{}\n\n# What\n\n{}", request.why, request.what);
 
@@ -292,11 +296,20 @@ impl CliCommand for LinearCommand {
                     .await?;
 
                 println!("Created issue {} (id={})", issue.identifier, issue.id);
-                if let Some(url) = issue.url {
+                if let Some(url) = &issue.url {
                     println!("  URL: {}", url);
                 }
                 println!("  Team: {}", request.team);
                 println!("  Assignee: {}", request.assignee);
+
+                // Create dependency relations: the dependency issue blocks the new issue
+                for (identifier, dep_issue_id) in &dependencies {
+                    client
+                        .create_issue_relation(&dep_issue_id, &issue.id)
+                        .await
+                        .with_context(|| format!("Failed to add dependency on {}", identifier))?;
+                    println!("  Dependency: {} (blocks this issue)", identifier);
+                }
 
                 Ok(())
             }

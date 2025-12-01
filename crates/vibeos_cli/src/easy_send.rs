@@ -13,6 +13,9 @@ pub struct EasySendYaml {
     pub why: String,
     pub what: String,
     pub priority: Option<i32>,
+    /// List of issue identifiers (e.g., NIN-70, DAT-16) that this issue depends on
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -23,6 +26,8 @@ pub struct EasySendRequest {
     pub why: String,
     pub what: String,
     pub priority: Option<i32>,
+    /// Issue identifiers (e.g., NIN-70) that this issue depends on
+    pub dependencies: Vec<String>,
 }
 
 /// Parse input from either YAML file or stdin pipe format
@@ -62,6 +67,7 @@ pub fn parse_easy_send_input(input: &str) -> Result<EasySendRequest> {
             why: yaml.why,
             what: yaml.what,
             priority: yaml.priority,
+            dependencies: yaml.dependencies,
         });
     }
 
@@ -113,6 +119,7 @@ fn parse_pipe_format(input: &str) -> Result<EasySendRequest> {
         why,
         what,
         priority: None,
+        dependencies: Vec::new(),
     })
 }
 
@@ -225,6 +232,38 @@ pub fn match_team(team_key: &str, issues: &[LinearIssueSnapshot]) -> Result<Stri
     }
 
     Ok(matches[0].1.to_string())
+}
+
+/// Match issue identifiers (e.g., NIN-70, DAT-16) to issue IDs
+/// Returns a Vec of (identifier, issue_id) pairs for each found dependency
+pub fn match_issue_identifiers(
+    identifiers: &[String],
+    issues: &[LinearIssueSnapshot],
+) -> Result<Vec<(String, String)>> {
+    let mut results = Vec::new();
+    let mut not_found = Vec::new();
+
+    for identifier in identifiers {
+        let identifier = identifier.trim();
+        if identifier.is_empty() {
+            continue;
+        }
+
+        if let Some(issue) = issues.iter().find(|i| i.identifier == identifier) {
+            results.push((identifier.to_string(), issue.id.clone()));
+        } else {
+            not_found.push(identifier.to_string());
+        }
+    }
+
+    if !not_found.is_empty() {
+        bail!(
+            "Could not find issues in mirror: {}. Run `linear sync` first?",
+            not_found.join(", ")
+        );
+    }
+
+    Ok(results)
 }
 
 pub fn read_input_from_file_or_stdin(file: Option<&std::path::Path>) -> Result<String> {
@@ -404,5 +443,46 @@ what: |
         assert_eq!(result.assignee, "alice");
         assert_eq!(result.team, "ENG");
         assert_eq!(result.title, None); // Parser doesn't auto-generate, command does
+    }
+
+    #[test]
+    fn test_parse_yaml_with_dependencies() {
+        let yaml = r#"
+who: cognivore@NIN
+title: Implement feature X
+why: |
+  We need feature X to complete the milestone.
+what: |
+  - [ ] Implement the feature
+  - [ ] Add tests
+dependencies:
+  - NIN-70
+  - DAT-16
+  - FE-132
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "cognivore");
+        assert_eq!(result.team, "NIN");
+        assert_eq!(result.dependencies.len(), 3);
+        assert_eq!(result.dependencies[0], "NIN-70");
+        assert_eq!(result.dependencies[1], "DAT-16");
+        assert_eq!(result.dependencies[2], "FE-132");
+    }
+
+    #[test]
+    fn test_parse_yaml_without_dependencies() {
+        let yaml = r#"
+who: bob@OPS
+why: |
+  Simple task without dependencies.
+what: |
+  - [ ] Do something
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "bob");
+        assert_eq!(result.team, "OPS");
+        assert!(result.dependencies.is_empty());
     }
 }
