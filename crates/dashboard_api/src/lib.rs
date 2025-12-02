@@ -129,11 +129,14 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         .on_failure(DefaultOnFailure::new().level(Level::ERROR));
 
     let api_router = routes::build_api_router()
-        .layer(cors)
         .layer(trace_layer.clone())
         .with_state(state.clone());
 
-    let mut app = Router::new().nest("/api", api_router).layer(trace_layer);
+    // Apply CORS to the entire app so error responses (including 404) include CORS headers
+    let mut app = Router::new()
+        .nest("/api", api_router)
+        .layer(cors)
+        .layer(trace_layer);
 
     if let Some(static_dir) = &settings.static_dir {
         let static_service = ServeDir::new(static_dir.clone())

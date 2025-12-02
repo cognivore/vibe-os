@@ -55,6 +55,13 @@ query SyncIssues($after: String, $updatedSince: DateTime) {
           name
         }
       }
+      cycle {
+        id
+        number
+        name
+        startsAt
+        endsAt
+      }
       history(first: 100) {
         nodes {
           id
@@ -73,6 +80,16 @@ query SyncIssues($after: String, $updatedSince: DateTime) {
           }
           fromPriority
           toPriority
+          fromCycle {
+            id
+            number
+            startsAt
+          }
+          toCycle {
+            id
+            number
+            startsAt
+          }
         }
       }
     }
@@ -111,6 +128,30 @@ pub struct LinearIssueSnapshot {
     pub completed_at: Option<DateTime<Utc>>,
     pub canceled_at: Option<DateTime<Utc>>,
     pub archived_at: Option<DateTime<Utc>>,
+    // Cycle information
+    #[serde(default)]
+    pub cycle_id: Option<String>,
+    #[serde(default)]
+    pub cycle_number: Option<i32>,
+    #[serde(default)]
+    pub cycle_name: Option<String>,
+    #[serde(default)]
+    pub cycle_starts_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub cycle_ends_at: Option<DateTime<Utc>>,
+    // Compact history for cycle changes
+    #[serde(default)]
+    pub cycle_history: Vec<CycleHistoryEntry>,
+}
+
+/// Compact representation of a cycle change event for detecting late additions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CycleHistoryEntry {
+    pub at: DateTime<Utc>,
+    pub from_cycle_number: Option<i32>,
+    pub to_cycle_number: Option<i32>,
+    #[serde(default)]
+    pub to_cycle_starts_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +254,9 @@ impl<'a> LinearSync<'a> {
 
 impl LinearIssueSnapshot {
     fn from_node(node: &IssueNode) -> Self {
+        // Extract cycle history from history entries
+        let cycle_history = extract_cycle_history(node);
+
         Self {
             id: node.id.clone(),
             identifier: node.identifier.clone(),
@@ -245,8 +289,35 @@ impl LinearIssueSnapshot {
             completed_at: node.completed_at.clone(),
             canceled_at: node.canceled_at.clone(),
             archived_at: node.archived_at.clone(),
+            // Cycle information
+            cycle_id: node.cycle.as_ref().map(|c| c.id.clone()),
+            cycle_number: node.cycle.as_ref().map(|c| c.number),
+            cycle_name: node.cycle.as_ref().and_then(|c| c.name.clone()),
+            cycle_starts_at: node.cycle.as_ref().and_then(|c| c.starts_at),
+            cycle_ends_at: node.cycle.as_ref().and_then(|c| c.ends_at),
+            cycle_history,
         }
     }
+}
+
+/// Extract cycle change history from issue history entries.
+fn extract_cycle_history(node: &IssueNode) -> Vec<CycleHistoryEntry> {
+    let mut entries = Vec::new();
+    if let Some(history) = &node.history {
+        for entry in &history.nodes {
+            // Only record if there was a cycle change
+            if entry.from_cycle.is_some() || entry.to_cycle.is_some() {
+                entries.push(CycleHistoryEntry {
+                    at: entry.created_at,
+                    from_cycle_number: entry.from_cycle.as_ref().map(|c| c.number),
+                    to_cycle_number: entry.to_cycle.as_ref().map(|c| c.number),
+                    to_cycle_starts_at: entry.to_cycle.as_ref().and_then(|c| c.starts_at),
+                });
+            }
+        }
+    }
+    entries.sort_by_key(|e| e.at);
+    entries
 }
 
 impl LinearIssueEvent {
@@ -677,7 +748,26 @@ struct IssueNode {
     state: Option<StateRefExtended>,
     assignee: Option<UserRef>,
     labels: Option<LabelConnection>,
+    cycle: Option<CycleRef>,
     history: Option<HistoryConnection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CycleRef {
+    id: String,
+    number: i32,
+    name: Option<String>,
+    starts_at: Option<DateTime<Utc>>,
+    ends_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CycleHistoryRef {
+    id: String,
+    number: i32,
+    starts_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -727,6 +817,8 @@ struct HistoryEntry {
     to_state: Option<StateRef>,
     from_priority: Option<i32>,
     to_priority: Option<i32>,
+    from_cycle: Option<CycleHistoryRef>,
+    to_cycle: Option<CycleHistoryRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

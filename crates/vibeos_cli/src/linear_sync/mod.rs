@@ -11,8 +11,8 @@ mod storage;
 mod transform;
 
 pub use models::{
-    LinearCommentRecord, LinearIssueEvent, LinearIssueSnapshot, LinearMirrorMeta, LinearUserNode,
-    LinearUserSnapshot,
+    CycleHistoryEntry, LinearCommentRecord, LinearIssueEvent, LinearIssueSnapshot,
+    LinearMirrorMeta, LinearUserNode, LinearUserSnapshot,
 };
 
 use queries::{IssuesQueryData, UsersQueryData, ISSUES_QUERY, USERS_QUERY};

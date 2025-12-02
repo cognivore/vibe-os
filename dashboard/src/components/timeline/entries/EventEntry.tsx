@@ -6,9 +6,11 @@ import type {
 import { Badge } from "../../ui/badge";
 import type {
   LinearEventData,
+  LinearThreadEntry,
   PersonaClickTarget,
   SlackEventData,
   SlackLinkTargets,
+  SlackThreadEntry,
 } from "../types";
 import { ActorChip } from "./ActorChip";
 
@@ -18,6 +20,7 @@ interface EventEntryProps {
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
   providerPersonaLabels?: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
+  onThreadClick?: (thread: SlackThreadEntry | LinearThreadEntry) => void;
 }
 
 export function EventEntry({
@@ -26,8 +29,17 @@ export function EventEntry({
   personaLookup,
   providerPersonaLabels,
   onPersonaClick,
+  onThreadClick,
 }: EventEntryProps) {
   const threadName = (event as { thread_name?: string | null }).thread_name;
+  const threadEntry = extractThreadEntry(event);
+  const canNavigateToThread = onThreadClick && threadEntry;
+
+  const handleThreadClick = () => {
+    if (canNavigateToThread) {
+      onThreadClick(threadEntry);
+    }
+  };
 
   return (
     <li className="p-4">
@@ -36,9 +48,27 @@ export function EventEntry({
           <Badge variant="secondary">{event.domain}</Badge>
           <p className="text-sm font-medium">{event.summary}</p>
           {threadName && (
-            <p className="text-xs text-muted-foreground italic">
-              ↪ {threadName}
-            </p>
+            <button
+              type="button"
+              onClick={handleThreadClick}
+              disabled={!canNavigateToThread}
+              className={`text-xs italic text-left ${
+                canNavigateToThread
+                  ? "text-primary hover:underline cursor-pointer"
+                  : "text-muted-foreground"
+              }`}
+            >
+              ↪ {threadName} {canNavigateToThread && "→"}
+            </button>
+          )}
+          {!threadName && canNavigateToThread && (
+            <button
+              type="button"
+              onClick={handleThreadClick}
+              className="text-xs text-primary hover:underline cursor-pointer"
+            >
+              View thread →
+            </button>
           )}
           <p className="text-xs text-muted-foreground">{event.kind}</p>
           {event.domain === "slack" ? (
@@ -63,6 +93,72 @@ export function EventEntry({
       </div>
     </li>
   );
+}
+
+/**
+ * Extract a minimal thread entry from an event for navigation purposes.
+ * The thread will be hydrated with full data when selected.
+ */
+function extractThreadEntry(
+  event: EventEnvelope,
+): SlackThreadEntry | LinearThreadEntry | null {
+  if (event.domain === "slack") {
+    return extractSlackThreadEntry(event);
+  }
+  if (event.domain === "linear") {
+    return extractLinearThreadEntry(event);
+  }
+  return null;
+}
+
+function extractSlackThreadEntry(event: EventEnvelope): SlackThreadEntry | null {
+  const data = event.data as SlackEventData;
+  const channel =
+    (typeof data.channel === "string" && data.channel.trim()) ||
+    (typeof event.entity_id === "string" && event.entity_id.split(":")[0]?.trim()) ||
+    null;
+  // Use thread_ts if available (message is part of a thread), otherwise use ts (message itself)
+  const threadTs =
+    (typeof data.thread_ts === "string" && data.thread_ts.trim()) ||
+    (typeof data.ts === "string" && data.ts.trim()) ||
+    null;
+
+  if (!channel || !threadTs) {
+    return null;
+  }
+
+  const threadId = `${channel}:${threadTs}`;
+  return {
+    type: "slack_thread",
+    threadId,
+    channelId: channel,
+    at: event.at,
+    // Minimal entry - will be hydrated when selected
+    root: event,
+    replies: [],
+  };
+}
+
+function extractLinearThreadEntry(event: EventEnvelope): LinearThreadEntry | null {
+  const data = event.data as LinearEventData;
+  const issueId = data.issue_id || null;
+
+  if (!issueId) {
+    return null;
+  }
+
+  return {
+    type: "linear_thread",
+    issueId,
+    issueIdentifier: data.issue_identifier ?? undefined,
+    issueTitle: data.issue_title ?? undefined,
+    issueUrl: data.issue_url ?? undefined,
+    issueDescription: data.issue_description ?? undefined,
+    at: event.at,
+    // Minimal entry - will be hydrated when selected
+    comments: [],
+    events: [event],
+  };
 }
 
 export function SlackEventBody({ event }: { event: EventEnvelope }) {

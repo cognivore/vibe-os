@@ -48,6 +48,13 @@ query SyncIssues($after: String, $updatedSince: DateTimeOrDuration) {
           name
         }
       }
+      cycle {
+        id
+        number
+        name
+        startsAt
+        endsAt
+      }
       history(first: 100) {
         nodes {
           id
@@ -66,6 +73,16 @@ query SyncIssues($after: String, $updatedSince: DateTimeOrDuration) {
           }
           fromPriority
           toPriority
+          fromCycle {
+            id
+            number
+            startsAt
+          }
+          toCycle {
+            id
+            number
+            startsAt
+          }
         }
       }
       comments(first: 100) {
@@ -173,8 +190,27 @@ pub struct IssueNode {
     pub state: Option<StateRefExtended>,
     pub assignee: Option<UserRef>,
     pub labels: Option<LabelConnection>,
+    pub cycle: Option<CycleRef>,
     pub history: Option<HistoryConnection>,
     pub comments: Option<CommentConnection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CycleRef {
+    pub id: String,
+    pub number: i32,
+    pub name: Option<String>,
+    pub starts_at: Option<DateTime<Utc>>,
+    pub ends_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CycleHistoryRef {
+    pub id: String,
+    pub number: i32,
+    pub starts_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +280,8 @@ pub struct HistoryEntry {
     pub to_state: Option<StateRef>,
     pub from_priority: Option<i32>,
     pub to_priority: Option<i32>,
+    pub from_cycle: Option<CycleHistoryRef>,
+    pub to_cycle: Option<CycleHistoryRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

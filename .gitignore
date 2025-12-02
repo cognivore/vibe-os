@@ -24,3 +24,5 @@ dashboard/dist/
 !DESIGN.md
 
 *.txt
+
+priv/candidates/*

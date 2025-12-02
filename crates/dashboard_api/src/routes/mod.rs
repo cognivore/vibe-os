@@ -24,6 +24,7 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/search/reindex", post(search::reindex))
         .route("/search/thread-titles", post(search::get_thread_titles))
         .route("/linear/issues/:issue_ref", get(linear::get_linear_issue))
+        .route("/linear/snapshot", get(linear::list_linear_issues))
         .route(
             "/slack/threads/:channel/:thread_ts",
             get(slack::get_slack_thread),

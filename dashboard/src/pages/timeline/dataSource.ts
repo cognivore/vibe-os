@@ -1,5 +1,4 @@
 import {
-  getArrows,
   getDomains,
   getEvents,
   getLinearIssue,
@@ -9,7 +8,6 @@ import {
 import type {
   TimelineDataQuery,
   TimelineDataSource,
-  TimelineWindow,
 } from "./adapters";
 
 export function createTimelineApiDataSource(): TimelineDataSource {
@@ -24,11 +22,8 @@ export function createTimelineApiDataSource(): TimelineDataSource {
         limit: query.limit,
         cursor: query.cursor,
       }),
-    fetchArrows: (window: TimelineWindow) =>
-      getArrows({
-        from: window.from,
-        to: window.to,
-      }),
+    // Arrows are deprecated - return empty array
+    fetchArrows: () => Promise.resolve([]),
     fetchSlackThread: (channelId: string, threadTs: string) =>
       getSlackThread(channelId, threadTs),
     fetchLinearIssue: (issueRef: string) => getLinearIssue(issueRef),

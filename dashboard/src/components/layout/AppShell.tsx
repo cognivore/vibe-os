@@ -4,8 +4,7 @@ import { cn } from "../../lib/utils";
 
 const NAV_ITEMS = [
   { label: "Timeline", to: "/" },
-  { label: "Arrows", to: "/arrows" },
-  { label: "Operators", to: "/operators" },
+  { label: "Linear Overview", to: "/linear" },
   { label: "Identities", to: "/identities" },
   { label: "Settings", to: "/settings" },
 ];
@@ -51,7 +50,7 @@ export default function AppShell({ children }: AppShellProps) {
             <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
               <div>
                 <p className="text-sm text-muted-foreground">
-                  Unified events, operators, and arrows
+                  Linear cycle reports and unified timeline
                 </p>
                 <p className="text-xs text-muted-foreground">
                   API target: {import.meta.env.VITE_API_BASE ?? "http://localhost:3000"}

@@ -46,6 +46,7 @@ export function TimelineEntryList({
               personaLookup={personaLookup}
               providerPersonaLabels={providerPersonaLabels}
               onPersonaClick={onPersonaClick}
+              onThreadClick={onThreadSelect}
             />
           );
         }

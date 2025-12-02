@@ -25,6 +25,30 @@ pub struct LinearIssueSnapshot {
     pub completed_at: Option<DateTime<Utc>>,
     pub canceled_at: Option<DateTime<Utc>>,
     pub archived_at: Option<DateTime<Utc>>,
+    // Cycle information
+    #[serde(default)]
+    pub cycle_id: Option<String>,
+    #[serde(default)]
+    pub cycle_number: Option<i32>,
+    #[serde(default)]
+    pub cycle_name: Option<String>,
+    #[serde(default)]
+    pub cycle_starts_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub cycle_ends_at: Option<DateTime<Utc>>,
+    // Compact history for cycle changes (timestamp, from_cycle_number, to_cycle_number)
+    #[serde(default)]
+    pub cycle_history: Vec<CycleHistoryEntry>,
+}
+
+/// Compact representation of a cycle change event for detecting late additions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CycleHistoryEntry {
+    pub at: DateTime<Utc>,
+    pub from_cycle_number: Option<i32>,
+    pub to_cycle_number: Option<i32>,
+    #[serde(default)]
+    pub to_cycle_starts_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

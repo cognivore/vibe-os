@@ -1,13 +1,8 @@
 import type {
-  Arrow,
-  ArrowDirection,
   DomainDescriptor,
   EventEnvelope,
   Identity,
-  OperatorDescriptor,
-  Persona,
   ProviderPersonasPayload,
-  RunOperatorResponse,
 } from "../types/core";
 
 const DEFAULT_BASE = "http://localhost:3000";
@@ -19,8 +14,13 @@ async function request<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  // Only set Content-Type for requests with a body to avoid unnecessary CORS preflight
+  const headers: HeadersInit = init?.body
+    ? { "Content-Type": "application/json", ...(init?.headers ?? {}) }
+    : { ...(init?.headers ?? {}) };
+
   const response = await fetch(`${API_ROOT}${path}`, {
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers,
     ...init,
   });
 
@@ -89,58 +89,8 @@ export async function getEvents(params: EventsQuery): Promise<TimelineEventsResp
   return (await response.json()) as TimelineEventsResponse;
 }
 
-export async function getOperators(): Promise<OperatorDescriptor[]> {
-  return request("/api/operators");
-}
-
-export interface RunOperatorParams {
-  operatorId: string;
-  domains?: string[];
-  from: string;
-  to: string;
-}
-
-export async function runOperator(
-  params: RunOperatorParams,
-): Promise<RunOperatorResponse> {
-  return request("/api/operators/run", {
-    method: "POST",
-    body: JSON.stringify({
-      operator_id: params.operatorId,
-      domains: params.domains,
-      from: params.from,
-      to: params.to,
-    }),
-  });
-}
-
-export interface ArrowsQuery {
-  from: string;
-  to: string;
-  direction?: ArrowDirection;
-  sourceDomains?: string[];
-  targetDomains?: string[];
-}
-
-export async function getArrows(params: ArrowsQuery): Promise<Arrow[]> {
-  const url = new URL(`${API_ROOT}/api/arrows`);
-  url.searchParams.set("from", params.from);
-  url.searchParams.set("to", params.to);
-  if (params.direction) {
-    url.searchParams.set("direction", params.direction);
-  }
-  if (params.sourceDomains?.length) {
-    url.searchParams.set("source_domains", params.sourceDomains.join(","));
-  }
-  if (params.targetDomains?.length) {
-    url.searchParams.set("target_domains", params.targetDomains.join(","));
-  }
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return (await response.json()) as Arrow[];
-}
+// Deprecated: Operators and Arrows API have been removed.
+// See Linear Dashboard for cycle-based reporting.
 
 export interface MetaSnapshot {
   slack_mirror_dir: string;
@@ -318,6 +268,55 @@ export async function searchTimeline(params: SearchQuery): Promise<SearchRespons
 
 export async function reindexSearch(): Promise<void> {
   return request("/api/search/reindex", { method: "POST" });
+}
+
+// Linear Dashboard API
+
+export interface CycleHistoryEntry {
+  at: string;
+  from_cycle_number: number | null;
+  to_cycle_number: number | null;
+  to_cycle_starts_at: string | null;
+}
+
+export interface LinearIssueSnapshot {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string | null;
+  url: string | null;
+  team_id: string | null;
+  team_key: string | null;
+  team_name: string | null;
+  state_id: string | null;
+  state_name: string | null;
+  state_type: string | null;
+  assignee_id: string | null;
+  assignee_name: string | null;
+  labels: string[];
+  priority: number | null;
+  estimate: number | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  canceled_at: string | null;
+  archived_at: string | null;
+  cycle_id: string | null;
+  cycle_number: number | null;
+  cycle_name: string | null;
+  cycle_starts_at: string | null;
+  cycle_ends_at: string | null;
+  cycle_history: CycleHistoryEntry[];
+}
+
+export interface LinearIssuesResponse {
+  issues: LinearIssueSnapshot[];
+  last_sync_at: string | null;
+  workspace_name: string | null;
+}
+
+export async function getLinearIssues(): Promise<LinearIssuesResponse> {
+  return request("/api/linear/snapshot");
 }
 
 export interface ThreadTitlesRequest {
