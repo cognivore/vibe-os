@@ -157,10 +157,13 @@ async fn handler_not_found() -> impl IntoResponse {
 }
 
 async fn background_slack_sync(token: String, mirror_dir: PathBuf, state: AppState) {
-    info!("Starting background Slack sync (every 60 seconds)");
+    // Slack heavily rate-limits API calls. Full sync can take hours.
+    // Run every 30 minutes to avoid overlapping syncs.
+    const SLACK_SYNC_INTERVAL_SECS: u64 = 30 * 60;
+    info!("Starting background Slack sync (every {} minutes)", SLACK_SYNC_INTERVAL_SECS / 60);
 
     loop {
-        sleep(Duration::from_secs(60)).await;
+        sleep(Duration::from_secs(SLACK_SYNC_INTERVAL_SECS)).await;
 
         info!("Running background Slack sync...");
         match run_slack_sync(&token, &mirror_dir).await {
@@ -185,16 +188,20 @@ async fn run_slack_sync(token: &str, mirror_dir: &Path) -> Result<()> {
     use tokio::process::Command;
     let vibeos_path = std::env::current_dir()?.join("target/debug/vibeos");
 
-    let status = Command::new(&vibeos_path)
+    let output = Command::new(&vibeos_path)
         .arg("slack")
         .arg("mirror")
         .env("VIBEOS_SLACK_TOKEN", token)
         .env("VIBEOS_SLACK_MIRROR_DIR", mirror_dir.display().to_string())
-        .status()
+        .output()
         .await?;
 
-    if !status.success() {
-        anyhow::bail!("Slack mirror sync exited with status: {}", status);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        error!("Slack sync stderr: {}", stderr);
+        error!("Slack sync stdout (last 500 chars): {}", stdout.chars().rev().take(500).collect::<String>().chars().rev().collect::<String>());
+        anyhow::bail!("Slack mirror sync exited with status: {}", output.status);
     }
 
     Ok(())
