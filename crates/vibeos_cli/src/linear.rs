@@ -213,6 +213,27 @@ impl LinearClient {
         })
     }
 
+    /// Delete an issue by its ID
+    pub async fn delete_issue(&self, issue_id: &str) -> Result<()> {
+        const QUERY: &str = r#"mutation IssueDelete($id: String!) {
+            issueDelete(id: $id) {
+                success
+            }
+        }"#;
+
+        let data: serde_json::Value = self
+            .graphql_query(QUERY, serde_json::json!({ "id": issue_id }))
+            .await?;
+
+        let success = data["issueDelete"]["success"].as_bool().unwrap_or(false);
+
+        if !success {
+            anyhow::bail!("issueDelete returned success=false");
+        }
+
+        Ok(())
+    }
+
     pub async fn graphql_query<T>(
         &self,
         query: &'static str,

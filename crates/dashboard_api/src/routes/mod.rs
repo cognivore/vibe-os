@@ -11,6 +11,7 @@ mod linear;
 mod operators;
 mod search;
 mod slack;
+mod sync;
 
 pub fn build_api_router() -> Router<AppState> {
     Router::new()
@@ -30,6 +31,8 @@ pub fn build_api_router() -> Router<AppState> {
             get(slack::get_slack_thread),
         )
         .route("/meta", get(events::fetch_meta))
+        .route("/sync/status", get(sync::get_sync_status))
+        .route("/sync/trigger", post(sync::trigger_sync))
         .nest("/identities", identities::router())
 }
 

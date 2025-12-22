@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { ScrollArea } from "../components/ui/scroll-area";
@@ -23,6 +23,11 @@ import {
 import { slackThreadAdapter } from "./timeline/threads/slackThreadAdapter";
 import { linearThreadAdapter } from "./timeline/threads/linearThreadAdapter";
 import { threadKey } from "./timeline/threadUtils";
+import {
+  getSyncStatus,
+  triggerSync,
+  type SyncStatusResponse,
+} from "../api/client";
 
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ss";
 const SEARCH_DEBOUNCE_MS = 700;
@@ -59,6 +64,51 @@ export default function TimelinePage() {
   const searchState = useTimelineSearch();
   const { search: performSearch, clear: clearSearch } = searchState;
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync status state
+  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
+  const [syncTriggering, setSyncTriggering] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  // Poll sync status every 5 seconds
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const status = await getSyncStatus();
+        setSyncStatus(status);
+      } catch {
+        // Silently fail status polling
+      }
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleSyncNow = async () => {
+    setSyncTriggering(true);
+    setSyncError(null);
+    try {
+      await triggerSync("all");
+      // Refresh status immediately after triggering
+      const status = await getSyncStatus();
+      setSyncStatus(status);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : "Failed to trigger sync");
+    } finally {
+      setSyncTriggering(false);
+    }
+  };
+
+  // Format last sync time for display
+  const formatLastSync = (isoDate: string | null): string => {
+    if (!isoDate) return "Never";
+    try {
+      return formatDistanceToNow(new Date(isoDate), { addSuffix: true });
+    } catch {
+      return "Unknown";
+    }
+  };
 
   const buildSearchParams = useCallback(
     (queryText: string) => ({
@@ -197,6 +247,45 @@ export default function TimelinePage() {
           <p className="text-sm text-muted-foreground">
             Events and arrows across all domains
           </p>
+          {/* Sync status indicator */}
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            {syncStatus && (
+              <>
+                {syncStatus.slack.enabled && (
+                  <span className="flex items-center gap-1">
+                    {syncStatus.slack.in_progress ? (
+                      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                    ) : (
+                      <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+                    )}
+                    Slack: {syncStatus.slack.in_progress ? "syncing..." : formatLastSync(syncStatus.slack.last_sync)}
+                  </span>
+                )}
+                {syncStatus.linear.enabled && (
+                  <span className="flex items-center gap-1">
+                    {syncStatus.linear.in_progress ? (
+                      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                    ) : (
+                      <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+                    )}
+                    Linear: {syncStatus.linear.in_progress ? "syncing..." : formatLastSync(syncStatus.linear.last_sync)}
+                  </span>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSyncNow}
+                  disabled={syncTriggering || syncStatus.any_in_progress}
+                  className="h-6 px-2 text-xs"
+                >
+                  {syncTriggering ? "Triggering..." : syncStatus.any_in_progress ? "Syncing..." : "Sync Now"}
+                </Button>
+                {syncError && (
+                  <span className="text-destructive">{syncError}</span>
+                )}
+              </>
+            )}
+          </div>
         </div>
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">

@@ -161,6 +161,36 @@ impl TimelineCache {
         events.sort_by(|a, b| a.at.cmp(&b.at));
         Ok(events)
     }
+
+    /// Invalidate the recent window (last 24 hours) for all domains.
+    /// This forces the next request to re-fetch fresh data from disk.
+    pub async fn invalidate_recent(&self) {
+        let now = Utc::now();
+        let recent_threshold = now - Duration::hours(REFRESH_RECENT_HOURS);
+
+        let mut state = self.state.lock().await;
+        for cache in state.per_domain.values_mut() {
+            // Clear last_fetch to force re-fetch on next request
+            cache.last_fetch = None;
+
+            // Remove events in the recent window so they get re-fetched
+            cache.entries.retain(|entry| entry.event.at < recent_threshold);
+
+            // Shrink coverage to exclude recent window
+            if let Some(ref mut coverage) = cache.coverage {
+                if coverage.end > recent_threshold {
+                    coverage.end = recent_threshold;
+                }
+                // If coverage is now invalid (start >= end), clear it entirely
+                if coverage.start >= coverage.end {
+                    cache.coverage = None;
+                }
+            }
+        }
+
+        // Bump version so clients know data changed
+        state.version += 1;
+    }
 }
 
 impl CacheState {

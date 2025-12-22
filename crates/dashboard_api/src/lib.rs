@@ -28,7 +28,7 @@ mod utils;
 pub use state::DashboardServerSettings;
 
 use search::{spawn_periodic_reindex, SearchService};
-use state::{AppState, MetaSnapshot};
+use state::{AppState, MetaSnapshot, SyncState};
 use timeline_cache::TimelineCache;
 use utils::{build_adapters, default_timeline_window};
 
@@ -59,6 +59,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
     });
 
     let timeline_cache = Arc::new(TimelineCache::new(adapters.clone(), identity_store.clone()));
+    let sync_state = Arc::new(Mutex::new(SyncState::new()));
 
     let state = AppState {
         adapters: adapters.clone(),
@@ -72,6 +73,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         linear_api_key,
         search: search_service.clone(),
         timeline_cache: timeline_cache.clone(),
+        sync_state,
     };
 
     spawn_periodic_reindex(state.clone());
@@ -157,18 +159,36 @@ async fn handler_not_found() -> impl IntoResponse {
 }
 
 async fn background_slack_sync(token: String, mirror_dir: PathBuf, state: AppState) {
-    // Slack heavily rate-limits API calls. Full sync can take hours.
-    // Run every 30 minutes to avoid overlapping syncs.
-    const SLACK_SYNC_INTERVAL_SECS: u64 = 30 * 60;
-    info!("Starting background Slack sync (every {} minutes)", SLACK_SYNC_INTERVAL_SECS / 60);
+    // Run every 5 minutes to keep data fresh while respecting Slack rate limits
+    const SLACK_SYNC_INTERVAL_SECS: u64 = 5 * 60;
+    info!(
+        "Starting background Slack sync (every {} minutes, immediate first sync)",
+        SLACK_SYNC_INTERVAL_SECS / 60
+    );
 
     loop {
-        sleep(Duration::from_secs(SLACK_SYNC_INTERVAL_SECS)).await;
-
+        // Run sync first, then sleep (ensures immediate sync on startup)
         info!("Running background Slack sync...");
-        match run_slack_sync(&token, &mirror_dir).await {
+
+        // Mark sync as in progress
+        {
+            let sync_state = state.sync_state.lock().await;
+            sync_state.set_slack_sync_started();
+        }
+
+        let result = run_slack_sync(&token, &mirror_dir).await;
+
+        // Mark sync as completed and update timestamp
+        {
+            let mut sync_state = state.sync_state.lock().await;
+            sync_state.set_slack_sync_completed();
+        }
+
+        match result {
             Ok(()) => {
                 info!("Background Slack sync completed successfully");
+                // Invalidate timeline cache for recent window to pick up new data
+                state.timeline_cache.invalidate_recent().await;
                 // Trigger immediate reindex after successful sync
                 match search::rebuild_full_index(&state).await {
                     Ok(count) => info!(count, "Search index rebuilt after Slack sync"),
@@ -177,10 +197,12 @@ async fn background_slack_sync(token: String, mirror_dir: PathBuf, state: AppSta
             }
             Err(e) => error!("Background Slack sync failed: {}", e),
         }
+
+        sleep(Duration::from_secs(SLACK_SYNC_INTERVAL_SECS)).await;
     }
 }
 
-async fn run_slack_sync(token: &str, mirror_dir: &Path) -> Result<()> {
+pub async fn run_slack_sync(token: &str, mirror_dir: &Path) -> Result<()> {
     info!("Syncing Slack mirror at {}", mirror_dir.display());
 
     // Use the vibeos binary from target directory
@@ -208,15 +230,36 @@ async fn run_slack_sync(token: &str, mirror_dir: &Path) -> Result<()> {
 }
 
 async fn background_linear_sync(api_key: String, mirror_dir: PathBuf, state: AppState) {
-    info!("Starting background Linear sync (every 60 seconds)");
+    const LINEAR_SYNC_INTERVAL_SECS: u64 = 60;
+    info!(
+        "Starting background Linear sync (every {} seconds, immediate first sync)",
+        LINEAR_SYNC_INTERVAL_SECS
+    );
 
     loop {
-        sleep(Duration::from_secs(60)).await;
-
+        // Run sync first, then sleep (ensures immediate sync on startup)
         info!("Running background Linear sync...");
-        match run_linear_sync(&api_key, &mirror_dir).await {
+
+        // Mark sync as in progress
+        {
+            let sync_state = state.sync_state.lock().await;
+            sync_state.set_linear_sync_started();
+        }
+
+        let result = run_linear_sync(&api_key, &mirror_dir).await;
+
+        // Mark sync as completed and update timestamp
+        {
+            let mut sync_state = state.sync_state.lock().await;
+            sync_state.set_linear_sync_completed();
+        }
+
+        match result {
             Ok(()) => {
                 info!("Background Linear sync completed successfully");
+                // Invalidate timeline cache for recent window to pick up new data
+                state.timeline_cache.invalidate_recent().await;
+                // Trigger immediate reindex after successful sync
                 match search::rebuild_full_index(&state).await {
                     Ok(count) => info!(count, "Search index rebuilt after Linear sync"),
                     Err(e) => error!("Failed to rebuild search index after Linear sync: {}", e),
@@ -224,10 +267,12 @@ async fn background_linear_sync(api_key: String, mirror_dir: PathBuf, state: App
             }
             Err(e) => error!("Background Linear sync failed: {}", e),
         }
+
+        sleep(Duration::from_secs(LINEAR_SYNC_INTERVAL_SECS)).await;
     }
 }
 
-async fn run_linear_sync(api_key: &str, mirror_dir: &Path) -> Result<()> {
+pub async fn run_linear_sync(api_key: &str, mirror_dir: &Path) -> Result<()> {
     info!("Syncing Linear mirror at {}", mirror_dir.display());
 
     use tokio::process::Command;

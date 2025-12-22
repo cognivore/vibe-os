@@ -108,6 +108,23 @@ pub enum LinearCommand {
         /// Path to YAML file with why/what sections
         file: Option<PathBuf>,
     },
+    /// Delete an issue by identifier (e.g., GTM-111)
+    DeleteIssue {
+        /// Issue identifier (e.g., GTM-111)
+        identifier: String,
+    },
+    /// Delete multiple issues matching a title pattern (for cleaning up recurring duplicates)
+    DeleteMatching {
+        /// Team key prefix (e.g., GTM)
+        #[arg(long)]
+        team: String,
+        /// Exact title to match
+        #[arg(long)]
+        title: String,
+        /// Actually delete (without this flag, only shows what would be deleted)
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 #[async_trait]
@@ -389,6 +406,61 @@ impl CliCommand for LinearCommand {
                     println!("  URL: {}", url);
                 }
 
+                Ok(())
+            }
+            LinearCommand::DeleteIssue { identifier } => {
+                let cfg = ctx.config()?;
+
+                // Load issues to find the ID from identifier
+                let issues = linear_analysis::load_issues(&cfg.linear_mirror_dir)?;
+                let issue = issues
+                    .iter()
+                    .find(|i| i.identifier == *identifier)
+                    .context(format!("Issue {} not found in mirror. Run `linear sync` first.", identifier))?;
+
+                let api_key = config::linear_api_key()?;
+                let client = linear::LinearClient::new(api_key);
+                client.delete_issue(&issue.id).await?;
+
+                println!("Deleted issue {} ({})", identifier, issue.title);
+                Ok(())
+            }
+            LinearCommand::DeleteMatching { team, title, confirm } => {
+                let cfg = ctx.config()?;
+
+                // Load issues and find all matching the criteria
+                let issues = linear_analysis::load_issues(&cfg.linear_mirror_dir)?;
+                let matching: Vec<_> = issues
+                    .iter()
+                    .filter(|i| i.identifier.starts_with(&format!("{}-", team)) && i.title == *title)
+                    .collect();
+
+                if matching.is_empty() {
+                    println!("No issues found matching team={} title=\"{}\"", team, title);
+                    return Ok(());
+                }
+
+                println!("Found {} issues matching team={} title=\"{}\":", matching.len(), team, title);
+                for issue in &matching {
+                    println!("  {} - {} ({})", issue.identifier, issue.title, issue.state_name.as_deref().unwrap_or("Unknown"));
+                }
+
+                if !confirm {
+                    println!("\nTo delete these issues, run with --confirm");
+                    return Ok(());
+                }
+
+                let api_key = config::linear_api_key()?;
+                let client = linear::LinearClient::new(api_key);
+
+                for issue in &matching {
+                    match client.delete_issue(&issue.id).await {
+                        Ok(()) => println!("Deleted {}", issue.identifier),
+                        Err(e) => eprintln!("Failed to delete {}: {}", issue.identifier, e),
+                    }
+                }
+
+                println!("\nDone. Run `linear sync` to update local mirror.");
                 Ok(())
             }
         }

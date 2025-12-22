@@ -335,3 +335,37 @@ export async function getThreadTitles(threadIds: string[]): Promise<Record<strin
   return response.titles;
 }
 
+// Sync API
+
+export interface DomainSyncStatus {
+  last_sync: string | null;
+  in_progress: boolean;
+  enabled: boolean;
+}
+
+export interface SyncStatusResponse {
+  slack: DomainSyncStatus;
+  linear: DomainSyncStatus;
+  any_in_progress: boolean;
+}
+
+export async function getSyncStatus(): Promise<SyncStatusResponse> {
+  return request("/api/sync/status");
+}
+
+export interface TriggerSyncRequest {
+  domains?: "slack" | "linear" | "all";
+}
+
+export interface TriggerSyncResponse {
+  message: string;
+  triggered: string[];
+}
+
+export async function triggerSync(domains?: "slack" | "linear" | "all"): Promise<TriggerSyncResponse> {
+  return request("/api/sync/trigger", {
+    method: "POST",
+    body: JSON.stringify({ domains: domains ?? "all" }),
+  });
+}
+
