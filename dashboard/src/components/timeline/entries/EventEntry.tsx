@@ -27,7 +27,7 @@ export function EventEntry({
   event,
   identityLookup,
   personaLookup,
-  providerPersonaLabels,
+  providerPersonaLabels = {},
   onPersonaClick,
   onThreadClick,
 }: EventEntryProps) {
@@ -41,6 +41,11 @@ export function EventEntry({
     }
   };
 
+  const userLookup = buildSlackUserLookup(
+    Object.values(identityLookup),
+    providerPersonaLabels,
+  );
+
   return (
     <li className="p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -52,11 +57,10 @@ export function EventEntry({
               type="button"
               onClick={handleThreadClick}
               disabled={!canNavigateToThread}
-              className={`text-xs italic text-left ${
-                canNavigateToThread
+              className={`text-xs italic text-left ${canNavigateToThread
                   ? "text-primary hover:underline cursor-pointer"
                   : "text-muted-foreground"
-              }`}
+                }`}
             >
               ↪ {threadName} {canNavigateToThread && "→"}
             </button>
@@ -73,7 +77,7 @@ export function EventEntry({
           <p className="text-xs text-muted-foreground">{event.kind}</p>
           {event.domain === "slack" ? (
             <div className="space-y-2">
-              <SlackEventBody event={event} />
+              <SlackEventBody event={event} userLookup={userLookup} />
               <SlackMessageLinks event={event} />
             </div>
           ) : event.domain === "linear" ? (
@@ -161,7 +165,13 @@ function extractLinearThreadEntry(event: EventEnvelope): LinearThreadEntry | nul
   };
 }
 
-export function SlackEventBody({ event }: { event: EventEnvelope }) {
+export function SlackEventBody({
+  event,
+  userLookup,
+}: {
+  event: EventEnvelope;
+  userLookup?: Record<string, string>;
+}) {
   const data = event.data as SlackEventData;
   const text = typeof data.text === "string" ? data.text : null;
   const attachments = Array.isArray(data.attachments) ? data.attachments : [];
@@ -175,7 +185,7 @@ export function SlackEventBody({ event }: { event: EventEnvelope }) {
     <div className="space-y-2 pt-1 text-sm text-foreground">
       {text ? (
         <p className="whitespace-pre-wrap text-sm">
-          {normalizeSlackMarkup(text)}
+          {normalizeSlackMarkup(text, userLookup)}
         </p>
       ) : null}
       {attachments.length ? (
@@ -290,7 +300,7 @@ export function LinearEventBody({ event }: { event: EventEnvelope }) {
     null;
   const description =
     typeof data.issue_description === "string" &&
-    data.issue_description.trim().length
+      data.issue_description.trim().length
       ? data.issue_description.trim()
       : extractLinearNote(data.extra);
   const stateChange =
@@ -299,10 +309,10 @@ export function LinearEventBody({ event }: { event: EventEnvelope }) {
       : null;
   const priorityChange =
     typeof data.from_priority === "number" ||
-    typeof data.to_priority === "number"
+      typeof data.to_priority === "number"
       ? `Priority: ${formatLinearPriority(data.from_priority)} → ${formatLinearPriority(
-          data.to_priority,
-        )}`
+        data.to_priority,
+      )}`
       : null;
 
   if (!title && !description && !stateChange && !priorityChange) {
@@ -368,9 +378,45 @@ export function extractLinearCommentSnippet(event: EventEnvelope) {
   return body ? body.slice(0, 160) : "Linear update";
 }
 
-export function normalizeSlackMarkup(text: string) {
+/**
+ * Builds a lookup map for resolving Slack user IDs to display names.
+ * Priority: identity.preferred_name > persona.display_name > persona.label > providerPersonaLabels
+ */
+export function buildSlackUserLookup(
+  identities: Identity[],
+  providerPersonaLabels: Record<string, string>,
+): Record<string, string> {
+  const lookup: Record<string, string> = { ...providerPersonaLabels };
+
+  // Override with identity-linked persona names (higher priority)
+  for (const identity of identities) {
+    for (const persona of identity.personas) {
+      if (persona.key.domain === "slack") {
+        const key = `slack:${persona.key.local_id}`;
+        const resolved =
+          identity.preferred_name ??
+          persona.display_name ??
+          persona.label ??
+          lookup[key];
+        if (resolved) {
+          lookup[key] = resolved;
+        }
+      }
+    }
+  }
+
+  return lookup;
+}
+
+export function normalizeSlackMarkup(
+  text: string,
+  userLookup?: Record<string, string>,
+) {
   return text
-    .replace(/<@([^>|]+)>/g, (_match, userId) => `@${userId}`)
+    .replace(/<@([^>|]+)>/g, (_match, userId) => {
+      const resolved = userLookup?.[`slack:${userId}`];
+      return resolved ? `@${resolved}` : `@${userId}`;
+    })
     .replace(/<!([^>|]+)(?:\|([^>]+))?>/g, (_match, command, label) =>
       label ? label : command,
     )

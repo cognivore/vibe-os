@@ -105,6 +105,7 @@ function LinearThreadPanel({
   entry: thread,
   identityLookup,
   personaLookup,
+  providerPersonaLabels: _providerPersonaLabels,
   onPersonaClick,
   onClose,
   loading,
@@ -300,10 +301,10 @@ function LinearEventUpdate({
       : null;
   const priorityChange =
     typeof data.from_priority === "number" ||
-    typeof data.to_priority === "number"
+      typeof data.to_priority === "number"
       ? `Priority: ${formatPriority(data.from_priority)} → ${formatPriority(
-          data.to_priority,
-        )}`
+        data.to_priority,
+      )}`
       : null;
 
   return (

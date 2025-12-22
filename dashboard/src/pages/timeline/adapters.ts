@@ -45,6 +45,7 @@ export interface ThreadPanelProps<TEntry extends ThreadEntry> {
   entry: TEntry;
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  providerPersonaLabels: Record<string, string>;
   onPersonaClick: (target: PersonaClickTarget) => void;
   onClose: () => void;
   loading?: boolean;

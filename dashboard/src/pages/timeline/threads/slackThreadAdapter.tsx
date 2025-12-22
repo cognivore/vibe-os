@@ -3,6 +3,7 @@ import { Button } from "../../../components/ui/button";
 import {
   SlackEventBody,
   SlackMessageLinks,
+  buildSlackUserLookup,
   normalizeSlackMarkup,
 } from "../../../components/timeline/entries/EventEntry";
 import type {
@@ -116,6 +117,7 @@ function SlackThreadPanel({
   entry: thread,
   identityLookup,
   personaLookup,
+  providerPersonaLabels,
   onClose,
   loading,
   error,
@@ -130,6 +132,11 @@ function SlackThreadPanel({
     [thread],
   );
 
+  const userLookup = useMemo(
+    () => buildSlackUserLookup(Object.values(identityLookup), providerPersonaLabels),
+    [identityLookup, providerPersonaLabels],
+  );
+
   const rootData = thread.root.data as SlackEventData & { reply_count?: number };
   const totalReplyCount =
     typeof rootData.reply_count === "number" ? rootData.reply_count : null;
@@ -138,11 +145,11 @@ function SlackThreadPanel({
 
   // Use fetched thread title, fallback to channel ID
   const threadTitle = thread.threadTitle
-    ? normalizeSlackMarkup(thread.threadTitle)
+    ? normalizeSlackMarkup(thread.threadTitle, userLookup)
     : (thread.channelId ? `#${thread.channelId}` : "thread");
 
   const handleExportMarkdown = () => {
-    const markdown = exportSlackThreadToMarkdown(thread, identityLookup, personaLookup);
+    const markdown = exportSlackThreadToMarkdown(thread, identityLookup, personaLookup, userLookup);
     const filename = `slack-thread-${thread.channelId}-${new Date().toISOString().split('T')[0]}.md`;
     downloadMarkdown(markdown, filename);
     setExportStatus("Downloaded!");
@@ -150,7 +157,7 @@ function SlackThreadPanel({
   };
 
   const handleCopyMarkdown = async () => {
-    const markdown = exportSlackThreadToMarkdown(thread, identityLookup, personaLookup);
+    const markdown = exportSlackThreadToMarkdown(thread, identityLookup, personaLookup, userLookup);
     await copyToClipboard(markdown);
     setExportStatus("Copied!");
     setTimeout(() => setExportStatus(null), 2000);
@@ -198,6 +205,7 @@ function SlackThreadPanel({
             event={message}
             identityLookup={identityLookup}
             personaLookup={personaLookup}
+            userLookup={userLookup}
           />
         ))}
       </div>
@@ -209,10 +217,12 @@ function SlackThreadMessage({
   event,
   identityLookup,
   personaLookup,
+  userLookup,
 }: {
   event: EventEnvelope;
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
+  userLookup: Record<string, string>;
 }) {
   const actorLabel = resolveSlackActor(event, identityLookup, personaLookup);
   return (
@@ -225,7 +235,7 @@ function SlackThreadMessage({
         </div>
       </div>
       <div className="mt-2 text-sm">
-        <SlackEventBody event={event} />
+        <SlackEventBody event={event} userLookup={userLookup} />
       </div>
     </div>
   );

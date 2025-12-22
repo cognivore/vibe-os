@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type {
   Identity,
   Persona,
@@ -8,6 +9,7 @@ import { ActorChip } from "./ActorChip";
 import {
   SlackEventBody,
   SlackMessageLinks,
+  buildSlackUserLookup,
   normalizeSlackMarkup,
 } from "./EventEntry";
 import type {
@@ -40,9 +42,14 @@ export function SlackThreadPreview({
 }: SlackThreadPreviewProps) {
   const replyCount = entry.replies.length;
 
+  const userLookup = useMemo(
+    () => buildSlackUserLookup(Object.values(identityLookup), providerPersonaLabels),
+    [identityLookup, providerPersonaLabels],
+  );
+
   // Use fetched thread title, fallback to channel ID
   const threadTitle = entry.threadTitle
-    ? normalizeSlackMarkup(entry.threadTitle)
+    ? normalizeSlackMarkup(entry.threadTitle, userLookup)
     : (entry.channelId ? `#${entry.channelId}` : "Slack thread");
 
   const latestTime = new Date(entry.at).toLocaleString();
@@ -54,7 +61,7 @@ export function SlackThreadPreview({
             <Badge variant="secondary">Slack thread</Badge>
             <p className="text-sm font-medium">{threadTitle}</p>
           </div>
-          {isSearchMode && <SlackEventBody event={entry.root} />}
+          {isSearchMode && <SlackEventBody event={entry.root} userLookup={userLookup} />}
           <SlackMessageLinks event={entry.root} />
           <div className="text-xs text-muted-foreground">
             {replyCount > 0

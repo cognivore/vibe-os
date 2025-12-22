@@ -9,13 +9,14 @@ export function exportSlackThreadToMarkdown(
   thread: SlackThreadEntry,
   identityLookup: Record<string, Identity>,
   personaLookup: Record<string, { persona: Persona; identityId: string }>,
+  userLookup?: Record<string, string>,
 ): string {
   const messages = [thread.root, ...thread.replies].sort(
     (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),
   );
 
   const threadTitle = thread.threadTitle
-    ? normalizeSlackMarkup(thread.threadTitle)
+    ? normalizeSlackMarkup(thread.threadTitle, userLookup)
     : (thread.channelId ? `#${thread.channelId}` : "Slack Thread");
 
   const lines: string[] = [];
@@ -36,7 +37,7 @@ export function exportSlackThreadToMarkdown(
     const actor = resolveSlackActor(message, identityLookup, personaLookup);
     const timestamp = new Date(message.at).toLocaleString();
     const data = message.data as SlackEventData;
-    const text = typeof data.text === "string" ? normalizeSlackMarkup(data.text) : "";
+    const text = typeof data.text === "string" ? normalizeSlackMarkup(data.text, userLookup) : "";
 
     lines.push(`## ${actor}`);
     lines.push(`*${timestamp}*`);

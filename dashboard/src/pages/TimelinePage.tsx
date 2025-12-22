@@ -417,6 +417,7 @@ export default function TimelinePage() {
                 entry={threadState.selectedThread as ThreadEntry}
                 identityLookup={timelineState.identityLookup}
                 personaLookup={timelineState.personaLookup}
+                providerPersonaLabels={timelineState.providerPersonaLabels}
                 onPersonaClick={handlePersonaClick}
                 onClose={threadState.clearSelection}
                 loading={threadState.loading}
