@@ -17,6 +17,7 @@ pub fn build_api_router() -> Router<AppState> {
     Router::new()
         .route("/domains", get(events::list_domains))
         .route("/events", get(events::list_events))
+        .route("/events/ranges", post(events::list_events_for_ranges))
         .route("/providers/personas", get(events::list_provider_personas))
         .route("/operators", get(operators::list_operators))
         .route("/operators/run", post(operators::run_operator))

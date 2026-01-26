@@ -1,0 +1,522 @@
+#!/usr/bin/env bash
+# Install Vibe-OS as macOS LaunchAgent services
+# Usage: ./install-service [install|uninstall|status|logs|restart]
+
+set -euo pipefail
+
+SERVICE_API="com.vibeos.api"
+SERVICE_DASHBOARD="com.vibeos.dashboard"
+SERVICE_CADDY="com.localhost.caddy"  # Shared across all *.localhost projects
+
+PLIST_API="$HOME/Library/LaunchAgents/${SERVICE_API}.plist"
+PLIST_DASHBOARD="$HOME/Library/LaunchAgents/${SERVICE_DASHBOARD}.plist"
+PLIST_CADDY="$HOME/Library/LaunchAgents/${SERVICE_CADDY}.plist"
+
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOG_DIR="$HOME/.vibeos/logs"
+
+# Shared Caddy location - convention for all *.localhost projects
+CADDY_HOME="$HOME/Caddy"
+CADDY_SITES_DIR="$CADDY_HOME/sites"
+CADDY_LOGS_DIR="$CADDY_HOME/logs"
+MY_CADDY_SITE="$CADDY_SITES_DIR/vibeos.Caddyfile"
+
+# Ports - using rare ports to avoid conflicts
+API_PORT=8485
+DASHBOARD_PORT=34853
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; }
+header() { echo -e "${BLUE}=== $1 ===${NC}"; }
+
+check_prerequisites() {
+    # Check nix is available
+    if ! command -v nix &>/dev/null; then
+        error "nix not found. Please install Nix first."
+        exit 1
+    fi
+
+    # Check flake.nix exists
+    if [[ ! -f "$PROJECT_DIR/flake.nix" ]]; then
+        error "flake.nix not found in $PROJECT_DIR"
+        exit 1
+    fi
+
+    # Check Cargo.toml exists
+    if [[ ! -f "$PROJECT_DIR/Cargo.toml" ]]; then
+        error "Cargo.toml not found in $PROJECT_DIR"
+        exit 1
+    fi
+
+    # Check dashboard exists
+    if [[ ! -d "$PROJECT_DIR/dashboard" ]]; then
+        error "dashboard directory not found in $PROJECT_DIR"
+        exit 1
+    fi
+
+    # Check pnpm lock exists (dependencies installed)
+    if [[ ! -f "$PROJECT_DIR/dashboard/pnpm-lock.yaml" ]]; then
+        warn "pnpm-lock.yaml not found. You may need to run: cd dashboard && pnpm install"
+    fi
+}
+
+# === Caddy Setup (Shared across all *.localhost projects) ===
+
+check_caddy_setup() {
+    # ~/Caddy is the central routing hub for all *.localhost projects
+    if [[ ! -d "$CADDY_HOME" ]]; then
+        error "~/Caddy not found. Please set up the central Caddy routing first."
+        error "See: ~/Caddy/README.md"
+        exit 1
+    fi
+
+    if [[ ! -f "$CADDY_HOME/bin/caddy-wrapper" ]]; then
+        error "~/Caddy/bin/caddy-wrapper not found. Is ~/Caddy set up correctly?"
+        exit 1
+    fi
+
+    if [[ ! -f "$CADDY_HOME/com.localhost.caddy.plist" ]]; then
+        error "~/Caddy/com.localhost.caddy.plist not found. Is ~/Caddy set up correctly?"
+        exit 1
+    fi
+
+    # Ensure the plist is installed
+    if [[ ! -f "$PLIST_CADDY" ]]; then
+        info "Installing shared Caddy plist from ~/Caddy..."
+        cp "$CADDY_HOME/com.localhost.caddy.plist" "$PLIST_CADDY"
+    fi
+}
+
+generate_caddy_site() {
+    mkdir -p "$CADDY_SITES_DIR"
+
+    # Use 127.0.0.1 instead of localhost to avoid DNS resolution timeouts on macOS
+    cat > "$MY_CADDY_SITE" << EOF
+# Vibe-OS Dashboard - http://vibeos.localhost
+http://vibeos.localhost {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:${API_PORT}
+	}
+	handle {
+		reverse_proxy 127.0.0.1:${DASHBOARD_PORT}
+	}
+}
+EOF
+    info "Generated Caddy site config at $MY_CADDY_SITE"
+}
+
+reload_caddy() {
+    # Gracefully reload Caddy config using ~/Caddy's wrapper
+    if launchctl list 2>/dev/null | grep -q "$SERVICE_CADDY"; then
+        info "Reloading Caddy configuration..."
+        "$CADDY_HOME/bin/caddy-wrapper" reload --config "$CADDY_HOME/Caddyfile" 2>/dev/null || \
+            launchctl kickstart -k "gui/$UID/$SERVICE_CADDY" 2>/dev/null || \
+            warn "Could not reload Caddy. You may need to run: cd ~/Caddy && caddy-reload"
+    fi
+}
+
+# === Project Services ===
+
+generate_api_plist() {
+    mkdir -p "$LOG_DIR"
+    mkdir -p "$(dirname "$PLIST_API")"
+
+    cat > "$PLIST_API" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${SERVICE_API}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/nix/var/nix/profiles/default/bin/nix</string>
+        <string>develop</string>
+        <string>${PROJECT_DIR}</string>
+        <string>--command</string>
+        <string>cargo</string>
+        <string>run</string>
+        <string>--</string>
+        <string>serve</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>${PROJECT_DIR}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>${HOME}</string>
+        <key>PATH</key>
+        <string>/nix/var/nix/profiles/default/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>RUST_LOG</key>
+        <string>info</string>
+        <key>VIBEOS_DASHBOARD_BIND</key>
+        <string>127.0.0.1:${API_PORT}</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/api.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/api.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+EOF
+    info "Generated API plist at $PLIST_API"
+}
+
+generate_dashboard_plist() {
+    mkdir -p "$LOG_DIR"
+    mkdir -p "$(dirname "$PLIST_DASHBOARD")"
+
+    cat > "$PLIST_DASHBOARD" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${SERVICE_DASHBOARD}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/nix/var/nix/profiles/default/bin/nix</string>
+        <string>develop</string>
+        <string>${PROJECT_DIR}</string>
+        <string>--command</string>
+        <string>bash</string>
+        <string>-c</string>
+        <string>cd dashboard &amp;&amp; pnpm dev --port ${DASHBOARD_PORT}</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>${PROJECT_DIR}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>${HOME}</string>
+        <key>PATH</key>
+        <string>/nix/var/nix/profiles/default/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/dashboard.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/dashboard.stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+EOF
+    info "Generated dashboard plist at $PLIST_DASHBOARD"
+}
+
+do_install() {
+    info "Installing Vibe-OS services..."
+    check_prerequisites
+    check_caddy_setup  # Verify ~/Caddy is set up (central routing hub)
+
+    # Unload existing project services
+    for svc in "$SERVICE_API" "$SERVICE_DASHBOARD"; do
+        if launchctl list 2>/dev/null | grep -q "$svc"; then
+            warn "$svc already loaded. Unloading first..."
+            launchctl unload "$HOME/Library/LaunchAgents/${svc}.plist" 2>/dev/null || true
+        fi
+    done
+
+    # Generate project configs
+    generate_api_plist
+    generate_dashboard_plist
+    generate_caddy_site  # Just the site config, ~/Caddy owns the rest
+
+    # Ensure shared Caddy is running
+    if ! launchctl list 2>/dev/null | grep -q "$SERVICE_CADDY"; then
+        info "Starting shared Caddy reverse proxy..."
+        launchctl load "$PLIST_CADDY"
+        sleep 2
+    fi
+    # Always reload to pick up new site config
+    reload_caddy
+
+    # Load project services
+    info "Loading API service..."
+    launchctl load "$PLIST_API"
+
+    info "Loading dashboard service..."
+    launchctl load "$PLIST_DASHBOARD"
+
+    # Verify they're running
+    sleep 3
+    echo ""
+    do_status
+}
+
+do_uninstall() {
+    info "Uninstalling Vibe-OS services..."
+
+    # Unload project services
+    for plist in "$PLIST_API" "$PLIST_DASHBOARD"; do
+        if [[ -f "$plist" ]]; then
+            launchctl unload "$plist" 2>/dev/null || true
+            rm -f "$plist"
+            info "Removed $(basename "$plist")"
+        fi
+    done
+
+    # Remove site config
+    if [[ -f "$MY_CADDY_SITE" ]]; then
+        rm -f "$MY_CADDY_SITE"
+        info "Removed Caddy site config"
+        reload_caddy
+    fi
+
+    # Check if any other sites remain
+    local remaining_sites
+    remaining_sites=$(find "$CADDY_SITES_DIR" -name "*.Caddyfile" 2>/dev/null | wc -l | tr -d ' ')
+
+    if [[ "$remaining_sites" -eq 0 ]]; then
+        warn "No other *.localhost sites configured."
+        echo -n "  Remove shared Caddy service too? [y/N] "
+        read -r response
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            if [[ -f "$PLIST_CADDY" ]]; then
+                launchctl unload "$PLIST_CADDY" 2>/dev/null || true
+                rm -f "$PLIST_CADDY"
+                info "Removed shared Caddy service"
+            fi
+        fi
+    else
+        info "$remaining_sites other site(s) still using Caddy"
+    fi
+
+    info "Uninstall complete."
+}
+
+show_service_status() {
+    local name="$1"
+    local service_id="$2"
+    local svc_info
+    svc_info=$(launchctl list 2>/dev/null | grep "$service_id" || true)
+    if [[ -n "$svc_info" ]]; then
+        local pid=$(echo "$svc_info" | awk '{print $1}')
+        if [[ "$pid" != "-" && "$pid" =~ ^[0-9]+$ ]]; then
+            echo -e "  $name: ${GREEN}Running${NC} (PID: $pid)"
+        else
+            echo -e "  $name: ${YELLOW}Loaded but not running${NC}"
+        fi
+    else
+        echo -e "  $name: ${RED}Not installed${NC}"
+    fi
+}
+
+do_status() {
+    header "Service Status"
+    show_service_status "API" "$SERVICE_API"
+    show_service_status "Dashboard" "$SERVICE_DASHBOARD"
+    show_service_status "Caddy (shared)" "$SERVICE_CADDY"
+
+    echo ""
+    header "Health Check"
+    if curl -s "http://127.0.0.1:${API_PORT}/api/meta" 2>/dev/null | grep -q "slack_mirror_dir"; then
+        echo -e "  Backend API (${API_PORT}): ${GREEN}Healthy${NC}"
+    else
+        echo -e "  Backend API (${API_PORT}): ${RED}Not responding${NC}"
+    fi
+    if curl -s "http://127.0.0.1:${DASHBOARD_PORT}/" 2>/dev/null | grep -q -E "(html|script)"; then
+        echo -e "  Dashboard UI (${DASHBOARD_PORT}): ${GREEN}Running${NC}"
+    else
+        echo -e "  Dashboard UI (${DASHBOARD_PORT}): ${RED}Not responding${NC}"
+    fi
+    if curl -s "http://vibeos.localhost/api/meta" 2>/dev/null | grep -q "slack_mirror_dir"; then
+        echo -e "  Caddy proxy: ${GREEN}Working${NC}"
+    else
+        echo -e "  Caddy proxy: ${RED}Not working${NC}"
+    fi
+
+    echo ""
+    header "URLs"
+    echo -e "  App:      ${GREEN}http://vibeos.localhost${NC}"
+    echo "  API:      http://vibeos.localhost/api"
+    echo "  Direct:   http://localhost:${DASHBOARD_PORT} (dashboard)"
+    echo "            http://localhost:${API_PORT} (backend)"
+
+    echo ""
+    header "Other *.localhost Sites"
+    if [[ -d "$CADDY_SITES_DIR" ]]; then
+        for site in "$CADDY_SITES_DIR"/*.Caddyfile; do
+            [[ -f "$site" ]] || continue
+            local domain
+            domain=$(grep -oE 'http://[a-z0-9.-]+\.localhost' "$site" | head -1 || basename "$site" .Caddyfile)
+            echo "  $domain"
+        done
+    fi
+
+    echo ""
+    header "Log Files"
+    echo "  API:       $LOG_DIR/api.stderr.log"
+    echo "  Dashboard: $LOG_DIR/dashboard.stderr.log"
+    echo "  Caddy:     $CADDY_LOGS_DIR/caddy.stderr.log"
+
+    echo ""
+    header "Data Directories"
+    local data_items=0
+    if [[ -d "$PROJECT_DIR/arrows" ]]; then
+        local arrow_count=$(find "$PROJECT_DIR/arrows" -name "*.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+        echo "  Arrows: ${arrow_count} files"
+        ((data_items+=arrow_count))
+    fi
+    if [[ -d "$PROJECT_DIR/linear_mirror" ]]; then
+        local linear_count=$(find "$PROJECT_DIR/linear_mirror" -name "*.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+        echo "  Linear Mirror: ${linear_count} files"
+        ((data_items+=linear_count))
+    fi
+    if [[ -d "$PROJECT_DIR/slack_mirror" ]]; then
+        local slack_convos=$(find "$PROJECT_DIR/slack_mirror/conversations" -name "*.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+        echo "  Slack Conversations: ${slack_convos} files"
+        ((data_items+=slack_convos))
+    fi
+    if [[ $data_items -eq 0 ]]; then
+        echo "  No data synced yet"
+    fi
+}
+
+do_logs() {
+    local service="${2:-all}"
+
+    if [[ "$service" == "all" || "$service" == "api" ]]; then
+        header "API Logs (last 30 lines)"
+        tail -30 "$LOG_DIR/api.stderr.log" 2>/dev/null || echo "  (no logs yet)"
+        echo ""
+    fi
+
+    if [[ "$service" == "all" || "$service" == "dashboard" ]]; then
+        header "Dashboard Logs (last 20 lines)"
+        tail -20 "$LOG_DIR/dashboard.stderr.log" 2>/dev/null || echo "  (no logs yet)"
+        echo ""
+    fi
+
+    if [[ "$service" == "all" || "$service" == "caddy" ]]; then
+        header "Caddy Logs (last 15 lines)"
+        tail -15 "$CADDY_LOGS_DIR/caddy.stderr.log" 2>/dev/null || echo "  (no logs yet)"
+    fi
+}
+
+do_follow() {
+    header "Following logs (Ctrl+C to stop)"
+    tail -f "$LOG_DIR/api.stderr.log" "$LOG_DIR/dashboard.stderr.log" 2>/dev/null || \
+        error "No log files found. Is the service installed?"
+}
+
+do_restart() {
+    info "Restarting Vibe-OS services..."
+
+    if [[ -f "$PLIST_API" ]]; then
+        launchctl unload "$PLIST_API" 2>/dev/null || true
+    fi
+    if [[ -f "$PLIST_DASHBOARD" ]]; then
+        launchctl unload "$PLIST_DASHBOARD" 2>/dev/null || true
+    fi
+
+    sleep 1
+
+    if [[ -f "$PLIST_API" ]]; then
+        launchctl load "$PLIST_API"
+    else
+        error "API not installed. Run: $0 install"
+        exit 1
+    fi
+
+    if [[ -f "$PLIST_DASHBOARD" ]]; then
+        launchctl load "$PLIST_DASHBOARD"
+    fi
+
+    sleep 3
+    do_status
+}
+
+# Main
+case "${1:-help}" in
+    install)
+        do_install
+        ;;
+    uninstall|remove)
+        do_uninstall
+        ;;
+    status)
+        do_status
+        ;;
+    logs)
+        do_logs "$@"
+        ;;
+    follow)
+        do_follow
+        ;;
+    restart)
+        do_restart
+        ;;
+    *)
+        echo "Vibe-OS Service Manager"
+        echo ""
+        echo "Usage: $0 <command>"
+        echo ""
+        echo "Commands:"
+        echo "  install    Install API + dashboard as LaunchAgents + register with Caddy"
+        echo "  uninstall  Stop and remove LaunchAgents"
+        echo "  status     Show service status and health check"
+        echo "  restart    Restart both services"
+        echo "  logs       Show recent log output (logs [api|dashboard|caddy|all])"
+        echo "  follow     Tail logs continuously"
+        echo ""
+        echo "The services will:"
+        echo "  - Start automatically on login"
+        echo "  - Restart if they crash"
+        echo "  - Share Caddy with other *.localhost projects"
+        echo ""
+        echo -e "URL: ${GREEN}http://vibeos.localhost${NC}"
+        echo ""
+        echo "Log files: $LOG_DIR/"
+        ;;
+esac

@@ -16,9 +16,13 @@ import type {
 } from "../../../types/core";
 import { getProviderPersonas } from "../../../api/client";
 import {
-  cacheMatchesSelection,
+  cacheMatchesDomains,
+  commitRangeEvents,
   commitTimelineDelta,
   commitTimelineSnapshot,
+  computeMissingRanges,
+  filterEventsToWindow,
+  rangesContainWindow,
   selectionKeyForDomains,
   useTimelineCacheStore,
 } from "../state/useTimelineCache";
@@ -77,31 +81,41 @@ export function useTimelineData({
     () => [...selectedDomains],
     [selectedDomainsKey],
   );
-  const snapshotKey = `${selectedDomainsKey}:${window.from}:${window.to}`;
-  const matchesSelection =
-    stableDomains.length > 0 && cacheMatchesSelection(timelineCache, stableDomains, window);
-  const cachedEvents = useMemo(
-    () => (matchesSelection ? timelineCache.events : []),
-    [matchesSelection, timelineCache.eventsFingerprint],
-  );
-  const cacheCursor = matchesSelection ? timelineCache.cursor : null;
 
-  const snapshotFetchedRef = useRef<string | null>(null);
-  const snapshotInFlightRef = useRef<string | null>(null);
-  const deltaFetchedRef = useRef<string | null>(null);
-  const deltaInFlightRef = useRef<string | null>(null);
+  // Check if domains match (cache is usable at all)
+  const domainsMatch = stableDomains.length > 0 && cacheMatchesDomains(timelineCache, stableDomains);
+
+  // Compute missing ranges based on what's already cached
+  const missingRanges = useMemo(() => {
+    if (!domainsMatch || timelineCache.cachedRanges.length === 0) {
+      return [window]; // Need full fetch
+    }
+    return computeMissingRanges(window, timelineCache.cachedRanges);
+  }, [domainsMatch, window.from, window.to, timelineCache.cachedRanges]);
+
+  // Check if cache fully covers the requested window
+  const cacheCoversWindow = domainsMatch && rangesContainWindow(timelineCache.cachedRanges, window);
+
+  // Filter cached events to the requested window for display
+  const cachedEvents = useMemo(() => {
+    if (!domainsMatch) return [];
+    return filterEventsToWindow(timelineCache.events, window);
+  }, [domainsMatch, timelineCache.eventsFingerprint, window.from, window.to]);
+
+  const cacheCursor = domainsMatch ? timelineCache.cursor : null;
+
+  // Track fetching state for incremental range fetches
+  const rangesFetchedRef = useRef<Set<string>>(new Set());
+  const rangesInFlightRef = useRef<Set<string>>(new Set());
   const providerPersonasFetchedRef = useRef(false);
 
+  // Reset fetch tracking when domains change
   useEffect(() => {
-    if (!matchesSelection) {
-      snapshotFetchedRef.current = null;
-      snapshotInFlightRef.current = null;
-      deltaFetchedRef.current = null;
-      deltaInFlightRef.current = null;
-    } else {
-      snapshotFetchedRef.current = snapshotKey;
+    if (!domainsMatch) {
+      rangesFetchedRef.current.clear();
+      rangesInFlightRef.current.clear();
     }
-  }, [matchesSelection, snapshotKey]);
+  }, [domainsMatch]);
 
   useEffect(() => {
     if (!stableDomains.length) {
@@ -168,75 +182,146 @@ export function useTimelineData({
     };
   }, [dataSource, stableDomains, window.from, window.to]);
 
+  // Fetch missing ranges incrementally
   useEffect(() => {
     if (!stableDomains.length) {
       setEventsLoading(false);
       return;
     }
-    if (matchesSelection) {
+
+    // If cache fully covers the window, no fetch needed
+    if (cacheCoversWindow) {
       setEventsLoading(false);
       return;
     }
-    if (snapshotInFlightRef.current === snapshotKey) return;
+
+    // If domains don't match, we need a full snapshot for the requested window
+    if (!domainsMatch) {
+      const snapshotKey = `snapshot:${selectedDomainsKey}:${window.from}:${window.to}`;
+      if (rangesInFlightRef.current.has(snapshotKey)) return;
+
+      let cancelled = false;
+      rangesInFlightRef.current.add(snapshotKey);
+      setEventsLoading(true);
+      setError(null);
+
+      dataSource
+        .fetchEvents({
+          domains: stableDomains,
+          window,
+        })
+        .then((response) => {
+          if (cancelled) return;
+          if (response.mode !== "snapshot") {
+            throw new Error("Expected snapshot response");
+          }
+          commitTimelineSnapshot(stableDomains, response.window, response.cursor, response.events);
+          rangesFetchedRef.current.add(snapshotKey);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : String(err));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setEventsLoading(false);
+          }
+          rangesInFlightRef.current.delete(snapshotKey);
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // Domains match - fetch only missing ranges
+    if (missingRanges.length === 0) {
+      setEventsLoading(false);
+      return;
+    }
 
     let cancelled = false;
-    snapshotInFlightRef.current = snapshotKey;
+    const pendingRanges: string[] = [];
+
+    // Filter out ranges already fetched or in flight
+    const rangesToFetch = missingRanges.filter((range) => {
+      const rangeKey = `range:${range.from}:${range.to}`;
+      if (rangesFetchedRef.current.has(rangeKey) || rangesInFlightRef.current.has(rangeKey)) {
+        return false;
+      }
+      pendingRanges.push(rangeKey);
+      return true;
+    });
+
+    if (rangesToFetch.length === 0) {
+      setEventsLoading(false);
+      return;
+    }
+
+    // Mark ranges as in-flight
+    pendingRanges.forEach((key) => rangesInFlightRef.current.add(key));
     setEventsLoading(true);
     setError(null);
 
-    dataSource
-      .fetchEvents({
-        domains: stableDomains,
-        window,
-      })
-      .then((response) => {
-        if (cancelled) return;
-        if (response.mode !== "snapshot") {
-          throw new Error("Expected snapshot response");
+    // Fetch all missing ranges in parallel
+    Promise.all(
+      rangesToFetch.map(async (range, idx) => {
+        const rangeKey = pendingRanges[idx];
+        try {
+          const response = await dataSource.fetchEvents({
+            domains: stableDomains,
+            window: range,
+          });
+
+          if (cancelled) return;
+
+          if (response.mode === "snapshot") {
+            // Commit as a range addition (not replacing the whole cache)
+            commitRangeEvents(stableDomains, range, response.events);
+          }
+          rangesFetchedRef.current.add(rangeKey);
+        } catch (err) {
+          if (!cancelled) {
+            setError((prev) => prev ?? (err instanceof Error ? err.message : String(err)));
+          }
+        } finally {
+          rangesInFlightRef.current.delete(rangeKey);
         }
-        commitTimelineSnapshot(stableDomains, response.window, response.cursor, response.events);
-        snapshotFetchedRef.current = snapshotKey;
-        deltaFetchedRef.current = `${snapshotKey}:${response.cursor}`;
       })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setEventsLoading(false);
-        }
-        snapshotInFlightRef.current = null;
-      });
+    ).finally(() => {
+      if (!cancelled) {
+        setEventsLoading(false);
+      }
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [dataSource, matchesSelection, snapshotKey, stableDomains, window.from, window.to]);
+  }, [
+    dataSource,
+    stableDomains,
+    selectedDomainsKey,
+    domainsMatch,
+    cacheCoversWindow,
+    missingRanges,
+    window.from,
+    window.to,
+  ]);
 
+  // Delta updates for real-time changes (only when cursor is available)
   useEffect(() => {
-    if (!stableDomains.length) {
-      setEventsLoading(false);
-      return;
-    }
-    if (!matchesSelection) {
-      return;
-    }
-    if (cacheCursor == null) {
-      setEventsLoading(false);
-      return;
-    }
-    const deltaKey = `${snapshotKey}:${cacheCursor}`;
-    if (deltaFetchedRef.current === deltaKey || deltaInFlightRef.current === deltaKey) {
-      setEventsLoading(false);
+    if (!stableDomains.length) return;
+    if (!domainsMatch) return;
+    if (cacheCursor == null) return;
+
+    const deltaKey = `delta:${cacheCursor}`;
+    if (rangesFetchedRef.current.has(deltaKey) || rangesInFlightRef.current.has(deltaKey)) {
       return;
     }
 
     let cancelled = false;
-    deltaInFlightRef.current = deltaKey;
-    setEventsLoading(true);
-    setError(null);
+    rangesInFlightRef.current.add(deltaKey);
 
     dataSource
       .fetchEvents({
@@ -254,29 +339,22 @@ export function useTimelineData({
             response.added,
             response.removed,
           );
-          deltaFetchedRef.current = `${snapshotKey}:${response.cursor}`;
-        } else {
-          commitTimelineSnapshot(stableDomains, response.window, response.cursor, response.events);
-          snapshotFetchedRef.current = snapshotKey;
-          deltaFetchedRef.current = `${snapshotKey}:${response.cursor}`;
         }
+        rangesFetchedRef.current.add(deltaKey);
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err?.message ?? "Failed to refresh timeline data");
+          console.warn("Delta fetch failed:", err);
         }
       })
       .finally(() => {
-        if (!cancelled) {
-          setEventsLoading(false);
-        }
-        deltaInFlightRef.current = null;
+        rangesInFlightRef.current.delete(deltaKey);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [cacheCursor, dataSource, matchesSelection, snapshotKey, stableDomains, window.from, window.to]);
+  }, [cacheCursor, dataSource, domainsMatch, stableDomains, window.from, window.to]);
 
   const [threadEntries, setThreadEntries] = useState<ThreadEntry[]>([]);
 

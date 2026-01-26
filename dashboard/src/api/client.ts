@@ -89,6 +89,42 @@ export async function getEvents(params: EventsQuery): Promise<TimelineEventsResp
   return (await response.json()) as TimelineEventsResponse;
 }
 
+
+// Multi-range query for efficient incremental fetching
+export interface RangeSpec {
+  from: string;
+  to: string;
+}
+
+export interface MultiRangeQuery {
+  domains?: string[];
+  ranges: RangeSpec[];
+}
+
+export interface RangeEventsResult {
+  window: TimelineWindowResponse;
+  events: EventEnvelope[];
+}
+
+export interface MultiRangeResponse {
+  results: RangeEventsResult[];
+}
+
+/**
+ * Fetch events for multiple time ranges in a single request.
+ * More efficient than making multiple getEvents calls when expanding
+ * the timeline window.
+ */
+export async function getEventsForRanges(params: MultiRangeQuery): Promise<MultiRangeResponse> {
+  return request("/api/events/ranges", {
+    method: "POST",
+    body: JSON.stringify({
+      domains: params.domains?.join(","),
+      ranges: params.ranges,
+    }),
+  });
+}
+
 // Deprecated: Operators and Arrows API have been removed.
 // See Linear Dashboard for cycle-based reporting.
 
@@ -351,21 +387,14 @@ export interface SyncStatusResponse {
 
 export async function getSyncStatus(): Promise<SyncStatusResponse> {
   return request("/api/sync/status");
-}
-
-export interface TriggerSyncRequest {
+}export interface TriggerSyncRequest {
   domains?: "slack" | "linear" | "all";
-}
-
-export interface TriggerSyncResponse {
+}export interface TriggerSyncResponse {
   message: string;
   triggered: string[];
-}
-
-export async function triggerSync(domains?: "slack" | "linear" | "all"): Promise<TriggerSyncResponse> {
+}export async function triggerSync(domains?: "slack" | "linear" | "all"): Promise<TriggerSyncResponse> {
   return request("/api/sync/trigger", {
     method: "POST",
     body: JSON.stringify({ domains: domains ?? "all" }),
   });
 }
-

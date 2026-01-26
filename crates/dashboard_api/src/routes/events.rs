@@ -6,6 +6,7 @@ use core_model::time::TimeWindow;
 use core_persona::identity::IdentityId;
 use core_persona::provider::{LinearProviderPersona, SlackProviderPersona};
 use domain_adapters::{load_linear_personas, load_slack_personas};
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
@@ -106,6 +107,64 @@ pub async fn list_provider_personas(
 
 pub async fn fetch_meta(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     Json(state.meta.as_ref().clone())
+}
+
+// ============================================================================
+// Multi-range endpoint for efficient incremental fetching
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct RangeSpec {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Deserialize)]
+pub struct MultiRangeQuery {
+    pub domains: Option<String>,
+    pub ranges: Vec<RangeSpec>,
+}
+
+#[derive(Serialize)]
+pub struct RangeEventsResult {
+    pub window: WindowBounds,
+    pub events: Vec<EventEnvelope>,
+}
+
+#[derive(Serialize)]
+pub struct MultiRangeResponse {
+    pub results: Vec<RangeEventsResult>,
+}
+
+/// Fetch events for multiple time ranges in a single request.
+/// This is more efficient than making multiple requests when expanding
+/// the timeline window.
+pub async fn list_events_for_ranges(
+    State(state): State<AppState>,
+    Json(query): Json<MultiRangeQuery>,
+) -> Result<Json<MultiRangeResponse>, AppError> {
+    let domains = select_domains(query.domains.as_deref(), &state)?;
+
+    // Fetch all ranges in parallel
+    let futures = query.ranges.into_iter().map(|range_spec| {
+        let domains = domains.clone();
+        let state = state.clone();
+        async move {
+            let window = build_window(&range_spec.from, &range_spec.to)?;
+            let snapshot = state.timeline_cache.snapshot(&domains, &window).await?;
+            Ok::<_, AppError>(RangeEventsResult {
+                window: WindowBounds::from(&snapshot.window),
+                events: snapshot.events,
+            })
+        }
+    });
+
+    let results: Vec<Result<RangeEventsResult, AppError>> = join_all(futures).await;
+
+    // Collect results, propagating the first error if any
+    let results: Result<Vec<_>, _> = results.into_iter().collect();
+
+    Ok(Json(MultiRangeResponse { results: results? }))
 }
 
 impl From<&TimeWindow> for WindowBounds {

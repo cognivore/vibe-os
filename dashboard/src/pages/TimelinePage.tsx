@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { format, formatDistanceToNow } from "date-fns";
 import { Button } from "../components/ui/button";
@@ -15,6 +15,7 @@ import { useDomainSelection } from "./timeline/hooks/useDomainSelection";
 import { useTimelineData } from "./timeline/hooks/useTimelineData";
 import { useThreadSelection } from "./timeline/hooks/useThreadSelection";
 import { useTimelineSearch } from "./timeline/hooks/useTimelineSearch";
+import { useBackgroundRefresh } from "./timeline/hooks/useBackgroundRefresh";
 import { timelineApiDataSource } from "./timeline/dataSource";
 import {
   type ThreadAdapterRegistry,
@@ -30,7 +31,6 @@ import {
 } from "../api/client";
 
 const ISO_FORMAT = "yyyy-MM-dd'T'HH:mm:ss";
-const SEARCH_DEBOUNCE_MS = 700;
 
 const TIMELINE_PRESETS: { label: string; value: TimelineWindowPreset }[] = [
   { label: "24h", value: "24h" },
@@ -61,9 +61,13 @@ export default function TimelinePage() {
     domains: domainState.domains,
   });
 
+  // Background refresh for stale cached ranges (5 min TTL)
+  useBackgroundRefresh(dataSource, domainState.selectedDomains, {
+    enabled: !syncStatus?.any_in_progress, // Disable during active sync
+  });
+
   const searchState = useTimelineSearch();
   const { search: performSearch, clear: clearSearch } = searchState;
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync status state
   const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
@@ -136,12 +140,8 @@ export default function TimelinePage() {
     [buildSearchParams, clearSearch, performSearch],
   );
 
+  // Trigger search when query or params change (hook handles debouncing internally)
   useEffect(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
-
     const trimmed = searchQuery.trim();
     if (!trimmed) {
       clearSearch();
@@ -153,32 +153,14 @@ export default function TimelinePage() {
       return;
     }
 
-    debounceRef.current = setTimeout(() => {
-      performSearch(params);
-      debounceRef.current = null;
-    }, SEARCH_DEBOUNCE_MS);
-
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-        debounceRef.current = null;
-      }
-    };
+    performSearch(params);
   }, [searchQuery, buildSearchParams, clearSearch, performSearch]);
 
   const handleSearch = () => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
     runSearch(searchQuery);
   };
 
   const handleClearSearch = () => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
     setSearchQuery("");
     clearSearch();
   };
