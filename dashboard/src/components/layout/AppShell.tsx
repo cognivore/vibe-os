@@ -53,7 +53,7 @@ export default function AppShell({ children }: AppShellProps) {
                   Linear cycle reports and unified timeline
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  API target: {import.meta.env.VITE_API_BASE ?? "http://localhost:3000"}
+                  API target: {import.meta.env.VITE_API_BASE ?? "http://localhost:8485"}
                 </p>
               </div>
             </div>

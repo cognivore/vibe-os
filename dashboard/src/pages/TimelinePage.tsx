@@ -61,6 +61,9 @@ export default function TimelinePage() {
     domains: domainState.domains,
   });
 
+  // Sync status state (must be declared before useBackgroundRefresh)
+  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
+
   // Background refresh for stale cached ranges (5 min TTL)
   useBackgroundRefresh(dataSource, domainState.selectedDomains, {
     enabled: !syncStatus?.any_in_progress, // Disable during active sync
@@ -68,9 +71,6 @@ export default function TimelinePage() {
 
   const searchState = useTimelineSearch();
   const { search: performSearch, clear: clearSearch } = searchState;
-
-  // Sync status state
-  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
   const [syncTriggering, setSyncTriggering] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
 

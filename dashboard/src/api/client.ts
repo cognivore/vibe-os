@@ -5,7 +5,7 @@ import type {
   ProviderPersonasPayload,
 } from "../types/core";
 
-const DEFAULT_BASE = "http://localhost:3000";
+const DEFAULT_BASE = "http://localhost:8485";
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined) ?? DEFAULT_BASE;
 export const API_ROOT = API_BASE.replace(/\/$/, "");
