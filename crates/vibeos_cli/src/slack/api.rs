@@ -278,34 +278,76 @@ impl SlackClient {
         builder: RequestBuilder,
         label: &str,
     ) -> Result<Response> {
+        const MAX_CONNECTION_RETRIES: u32 = 3;
+        const MAX_RATE_LIMIT_RETRIES: u32 = 5;
+        const INITIAL_BACKOFF_SECS: u64 = 2;
+
         let base_builder = builder;
+        let mut connection_attempts = 0u32;
+        let mut rate_limit_attempts = 0u32;
 
         loop {
             let request = base_builder
                 .try_clone()
                 .context("Unable to clone Slack request for retry")?;
 
-            let response = request
-                .send()
-                .await
-                .with_context(|| format!("Failed to send {}", label))?;
+            let result = request.send().await;
 
-            if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                let wait = retry_after(&response);
-                println!(
-                    "Rate limited on {}. Waiting {}s before retrying...",
-                    label,
-                    wait.as_secs()
-                );
-                sleep(wait).await;
-                continue;
+            match result {
+                Ok(response) => {
+                    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                        rate_limit_attempts += 1;
+                        if rate_limit_attempts >= MAX_RATE_LIMIT_RETRIES {
+                            anyhow::bail!(
+                                "{} rate limited {} times, giving up to avoid blocking other requests",
+                                label,
+                                MAX_RATE_LIMIT_RETRIES
+                            );
+                        }
+
+                        let wait = retry_after(&response);
+                        println!(
+                            "Rate limited on {} (attempt {}/{}). Waiting {}s before retrying...",
+                            label,
+                            rate_limit_attempts,
+                            MAX_RATE_LIMIT_RETRIES,
+                            wait.as_secs()
+                        );
+                        sleep(wait).await;
+                        continue;
+                    }
+
+                    if !response.status().is_success() {
+                        anyhow::bail!("{} returned status: {}", label, response.status());
+                    }
+
+                    return Ok(response);
+                }
+                Err(e) => {
+                    connection_attempts += 1;
+                    if connection_attempts >= MAX_CONNECTION_RETRIES {
+                        return Err(e).with_context(|| {
+                            format!(
+                                "Failed to send {} after {} retries",
+                                label, MAX_CONNECTION_RETRIES
+                            )
+                        });
+                    }
+
+                    let backoff = Duration::from_secs(
+                        INITIAL_BACKOFF_SECS * (1 << (connection_attempts - 1)),
+                    );
+                    println!(
+                        "Connection error on {} (attempt {}/{}): {}. Retrying in {}s...",
+                        label,
+                        connection_attempts,
+                        MAX_CONNECTION_RETRIES,
+                        e,
+                        backoff.as_secs()
+                    );
+                    sleep(backoff).await;
+                }
             }
-
-            if !response.status().is_success() {
-                anyhow::bail!("{} returned status: {}", label, response.status());
-            }
-
-            return Ok(response);
         }
     }
 }

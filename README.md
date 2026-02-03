@@ -127,7 +127,7 @@ This boots the Axum server that exposes `/api/*` plus the static React dashboard
 
 - `VIBEOS_SLACK_MIRROR_DIR` / `VIBEOS_LINEAR_MIRROR_DIR`
 - `VIBEOS_ARROW_STORE_DIR` (default `./arrows`)
-- `VIBEOS_DASHBOARD_BIND` (default `127.0.0.1:3000`)
+- `VIBEOS_DASHBOARD_BIND` (default `127.0.0.1:8485`)
 - `VIBEOS_DASHBOARD_STATIC_DIR` (optional pre-built frontend directory)
 
 The API server includes a Tantivy-backed full-text search index that indexes all Slack messages and Linear issues. The search index is stored in `VIBEOS_SEARCH_INDEX_DIR` (default `./search_index`) and is automatically created on first run. To manually trigger a full reindex, use the `/api/search/reindex` endpoint (POST). The index is also incrementally updated via a background task that runs every 5 minutes.
@@ -142,7 +142,7 @@ pnpm install
 pnpm dev
 ```
 
-By default it targets `http://localhost:3000/api`. Override via `VITE_API_BASE`.
+By default it targets `http://localhost:8485/api`. Override via `VITE_API_BASE`. When using Caddy, access via `http://vibeos.localhost`.
 
 ---
 

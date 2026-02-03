@@ -1,7 +1,13 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const LINEAR_API_URL: &str = "https://api.linear.app/graphql";
+/// Default timeout for Linear API requests (60 seconds)
+const REQUEST_TIMEOUT_SECS: u64 = 60;
+/// Default timeout for establishing connections (30 seconds)
+const CONNECT_TIMEOUT_SECS: u64 = 30;
 const ISSUE_CREATE_MUTATION: &str = r#"
     mutation IssueCreate($input: IssueCreateInput!) {
         issueCreate(input: $input) {
@@ -80,10 +86,13 @@ pub struct LinearClient {
 
 impl LinearClient {
     pub fn new(api_key: String) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            api_key,
-        }
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .build()
+            .expect("Failed to build HTTP client");
+
+        Self { http, api_key }
     }
 
     pub async fn update_issue(
@@ -129,6 +138,61 @@ impl LinearClient {
         })
     }
 
+    /// Update issue state, priority, or other mutable fields
+    /// state_id: The ID of the workflow state to move the issue to
+    /// priority: 0 = No priority, 1 = Urgent, 2 = High, 3 = Normal, 4 = Low
+    /// assignee_id: The ID of the user to assign the issue to (or None to unassign)
+    pub async fn edit_issue(
+        &self,
+        issue_id: &str,
+        state_id: Option<&str>,
+        priority: Option<i32>,
+        assignee_id: Option<&str>,
+    ) -> Result<LinearIssue> {
+        let mut input = serde_json::json!({});
+
+        if let Some(s) = state_id {
+            input["stateId"] = serde_json::json!(s);
+        }
+
+        if let Some(p) = priority {
+            input["priority"] = serde_json::json!(p);
+        }
+
+        if let Some(a) = assignee_id {
+            input["assigneeId"] = serde_json::json!(a);
+        }
+
+        const QUERY: &str = r#"mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
+            issueUpdate(id: $id, input: $input) {
+                issue {
+                    id
+                    identifier
+                    title
+                    url
+                    state { name }
+                    priority
+                    assignee { name }
+                }
+            }
+        }"#;
+
+        let data: serde_json::Value = self
+            .graphql_query(QUERY, serde_json::json!({ "id": issue_id, "input": input }))
+            .await?;
+
+        let issue = data["issueUpdate"]["issue"]
+            .as_object()
+            .context("Missing issue in response")?;
+
+        Ok(LinearIssue {
+            id: issue["id"].as_str().unwrap_or_default().to_string(),
+            identifier: issue["identifier"].as_str().unwrap_or_default().to_string(),
+            title: issue["title"].as_str().unwrap_or_default().to_string(),
+            url: issue["url"].as_str().map(|s| s.to_string()),
+        })
+    }
+
     /// Create an issue relation (dependency)
     /// When `issue_id` depends on `related_issue_id`, create a "blocked_by" relation
     pub async fn create_issue_relation(
@@ -136,10 +200,26 @@ impl LinearClient {
         issue_id: &str,
         related_issue_id: &str,
     ) -> Result<()> {
+        self.create_issue_relation_typed(issue_id, related_issue_id, "blocks")
+            .await
+    }
+
+    /// Create an issue relation with a specific type
+    ///
+    /// Supported relation types:
+    /// - "blocks" - issue_id blocks related_issue_id
+    /// - "duplicate" - issue_id is a duplicate of related_issue_id
+    /// - "related" - issue_id is related to related_issue_id (bidirectional)
+    pub async fn create_issue_relation_typed(
+        &self,
+        issue_id: &str,
+        related_issue_id: &str,
+        relation_type: &str,
+    ) -> Result<()> {
         let input = serde_json::json!({
             "issueId": issue_id,
             "relatedIssueId": related_issue_id,
-            "type": "blocks"
+            "type": relation_type
         });
 
         let data: serde_json::Value = self
@@ -154,7 +234,7 @@ impl LinearClient {
             .unwrap_or(false);
 
         if !success {
-            anyhow::bail!("issueRelationCreate returned success=false");
+            anyhow::bail!("issueRelationCreate returned success=false for type '{}'", relation_type);
         }
 
         Ok(())

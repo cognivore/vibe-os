@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use super::mirror::{filter_newer, should_fetch_thread};
 use super::storage::{
@@ -9,6 +10,11 @@ use super::types::{SlackMessage, SlackUserSnapshot, CONVERSATIONS_DIR, PROFILES_
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 
+/// Default timeout for Slack API requests (60 seconds)
+const REQUEST_TIMEOUT_SECS: u64 = 60;
+/// Default timeout for establishing connections (30 seconds)
+const CONNECT_TIMEOUT_SECS: u64 = 30;
+
 pub struct SlackClient {
     pub(super) http: reqwest::Client,
     pub(super) token: String,
@@ -16,10 +22,13 @@ pub struct SlackClient {
 
 impl SlackClient {
     pub fn new(token: String) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            token,
-        }
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .build()
+            .expect("Failed to build HTTP client");
+
+        Self { http, token }
     }
 
     pub async fn join_all_public_channels(&self) -> Result<()> {
@@ -124,34 +133,22 @@ impl SlackClient {
 
             // Sync threads: prioritize new messages first, then check existing threads
             // This balances fresh content with keeping existing threads up to date
+            // Thread syncs are best-effort: errors are logged but don't fail the entire sync
 
-            // First, sync threads for new messages
+            // First, sync threads for new messages (high priority)
             for msg in &new_messages {
                 if should_fetch_thread(msg) {
                     let thread_ts = msg.thread_ts.as_deref().unwrap_or(&msg.ts);
-                    self.sync_thread(&conv.id, thread_ts, threads_dir).await?;
-                }
-            }
-
-            // Then, check all existing threads for updates
-            // This ensures we catch replies to old threads
-            if let Ok(entries) = std::fs::read_dir(threads_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-                        // Extract channel_id and thread_ts from filename
-                        // Format: {channel_id}_{thread_ts}.jsonl where thread_ts has . replaced with _
-                        if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                            if filename.starts_with(&conv.id) {
-                                // Extract thread_ts by removing channel_id prefix
-                                let thread_ts_part = &filename[conv.id.len() + 1..];
-                                let thread_ts = thread_ts_part.replace('_', ".");
-                                self.sync_thread(&conv.id, &thread_ts, threads_dir).await?;
-                            }
-                        }
+                    if let Err(e) = self.sync_thread(&conv.id, thread_ts, threads_dir).await {
+                        println!("  Warning: failed to sync thread {}: {}", thread_ts, e);
                     }
                 }
             }
+
+            // Skip checking existing threads for updates during regular syncs
+            // to avoid rate limits. Existing threads are updated when we see new
+            // messages in the conversation that reference them.
+            // Full thread refresh can be done via a separate command if needed.
         }
 
         Ok(())
