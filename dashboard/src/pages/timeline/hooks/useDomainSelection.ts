@@ -2,6 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import type { DomainDescriptor } from "../../../types/core";
 import type { TimelineDataSource } from "../adapters";
 
+const DEFAULT_SELECTED_DOMAINS = [
+  "slack",
+  "linear",
+  "github",
+  "grain",
+  "google_calendar",
+];
+
 export interface DomainSelectionState {
   domains: DomainDescriptor[];
   selectedDomains: string[];
@@ -14,7 +22,9 @@ export function useDomainSelection(
   dataSource: TimelineDataSource,
 ): DomainSelectionState {
   const [domains, setDomains] = useState<DomainDescriptor[]>([]);
-  const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
+  const [selectedDomains, setSelectedDomains] = useState<string[]>(
+    DEFAULT_SELECTED_DOMAINS,
+  );
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {

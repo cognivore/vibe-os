@@ -1,4 +1,8 @@
+use std::convert::Infallible;
+use std::time::Instant;
+
 use axum::extract::{Query, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::Json;
 use core_model::domain::builtin_domains;
 use core_model::event::EventEnvelope;
@@ -7,11 +11,14 @@ use core_persona::identity::IdentityId;
 use core_persona::provider::{LinearProviderPersona, SlackProviderPersona};
 use domain_adapters::{load_linear_personas, load_slack_personas};
 use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::utils::{build_window, parse_identity_id, select_domains};
+
+const PROVIDER_PERSONAS_CACHE_TTL_SECONDS: u64 = 60;
 
 #[derive(Deserialize)]
 pub struct EventsQuery {
@@ -100,8 +107,33 @@ pub async fn list_events(
 pub async fn list_provider_personas(
     State(state): State<AppState>,
 ) -> Result<Json<ProviderPersonasResponse>, AppError> {
-    let slack = load_slack_personas(&state.slack_mirror_dir)?;
-    let linear = load_linear_personas(&state.linear_mirror_dir)?;
+    {
+        let cache = state.provider_personas_cache.lock().await;
+        if let Some((fetched_at, slack, linear)) = cache.as_ref() {
+            if fetched_at.elapsed().as_secs() < PROVIDER_PERSONAS_CACHE_TTL_SECONDS {
+                return Ok(Json(ProviderPersonasResponse {
+                    slack: slack.clone(),
+                    linear: linear.clone(),
+                }));
+            }
+        }
+    }
+
+    let slack_mirror_dir = state.slack_mirror_dir.as_ref().clone();
+    let linear_mirror_dir = state.linear_mirror_dir.as_ref().clone();
+    let (slack, linear) = tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
+        let slack = load_slack_personas(&slack_mirror_dir)?;
+        let linear = load_linear_personas(&linear_mirror_dir)?;
+        Ok((slack, linear))
+    })
+    .await
+    .map_err(AppError::from)??;
+
+    {
+        let mut cache = state.provider_personas_cache.lock().await;
+        *cache = Some((Instant::now(), slack.clone(), linear.clone()));
+    }
+
     Ok(Json(ProviderPersonasResponse { slack, linear }))
 }
 
@@ -165,6 +197,52 @@ pub async fn list_events_for_ranges(
     let results: Result<Vec<_>, _> = results.into_iter().collect();
 
     Ok(Json(MultiRangeResponse { results: results? }))
+}
+
+const STREAM_PAGE_SIZE: usize = 100;
+
+#[derive(Deserialize)]
+pub struct StreamEventsQuery {
+    pub domains: Option<String>,
+    pub from: String,
+    pub to: String,
+}
+
+pub async fn stream_events(
+    State(state): State<AppState>,
+    Query(query): Query<StreamEventsQuery>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, AppError> {
+    let window = build_window(&query.from, &query.to)?;
+    let domains = select_domains(query.domains.as_deref(), &state)?;
+    let snapshot = state.timeline_cache.snapshot(&domains, &window).await?;
+
+    let cursor = snapshot.cursor;
+    let window_bounds = WindowBounds::from(&snapshot.window);
+    let total_events = snapshot.events.len();
+    let pages: Vec<Vec<EventEnvelope>> = snapshot
+        .events
+        .chunks(STREAM_PAGE_SIZE)
+        .map(|chunk| chunk.to_vec())
+        .collect();
+
+    let event_stream = stream::iter(pages.into_iter().enumerate().map(|(idx, events)| {
+        let payload = serde_json::json!({ "events": events, "page_index": idx });
+        Ok(Event::default()
+            .event("page")
+            .data(payload.to_string()))
+    }))
+    .chain(stream::once(async move {
+        let payload = serde_json::json!({
+            "cursor": cursor,
+            "window": window_bounds,
+            "total_events": total_events,
+        });
+        Ok(Event::default()
+            .event("done")
+            .data(payload.to_string()))
+    }));
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
 }
 
 impl From<&TimeWindow> for WindowBounds {

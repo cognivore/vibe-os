@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo } from "react";
 import type {
   Identity,
   Persona,
@@ -9,7 +9,6 @@ import { ActorChip } from "./ActorChip";
 import {
   SlackEventBody,
   SlackMessageLinks,
-  buildSlackUserLookup,
   normalizeSlackMarkup,
 } from "./EventEntry";
 import type {
@@ -23,29 +22,26 @@ interface SlackThreadPreviewProps {
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
   providerPersonaLabels: Record<string, string>;
+  userLookup: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
   onThreadSelect?: (thread: SlackThreadEntry) => void;
   isActive?: boolean;
   isSearchMode?: boolean;
 }
 
-export function SlackThreadPreview({
+export const SlackThreadPreview = memo(function SlackThreadPreview({
   entry,
   domainLookup,
   identityLookup,
   personaLookup,
   providerPersonaLabels,
+  userLookup,
   onPersonaClick,
   onThreadSelect,
   isActive,
   isSearchMode = false,
 }: SlackThreadPreviewProps) {
   const replyCount = entry.replies.length;
-
-  const userLookup = useMemo(
-    () => buildSlackUserLookup(Object.values(identityLookup), providerPersonaLabels),
-    [identityLookup, providerPersonaLabels],
-  );
 
   // Use fetched thread title, fallback to channel ID
   const threadTitle = entry.threadTitle
@@ -54,7 +50,7 @@ export function SlackThreadPreview({
 
   const latestTime = new Date(entry.at).toLocaleString();
   return (
-    <li className={`p-4 ${isActive ? "bg-primary/10" : "bg-muted/10"}`}>
+    <li className={`p-4 ${isActive ? "bg-primary/10" : "bg-muted/10"}`} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 80px" }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -91,5 +87,5 @@ export function SlackThreadPreview({
       </div>
     </li>
   );
-}
+});
 

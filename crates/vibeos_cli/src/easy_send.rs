@@ -18,6 +18,20 @@ pub struct EasySendYaml {
     pub dependencies: Vec<String>,
     /// Cycle number (e.g., 42) or name (e.g., "Sprint 42")
     pub cycle: Option<CycleSpec>,
+    /// Issues this one supersedes (will be marked as duplicates of the new issue)
+    #[serde(default)]
+    pub supersedes: Vec<String>,
+    /// Issues this builds upon (creates "related" links)
+    #[serde(default)]
+    pub builds_on: Vec<String>,
+    /// Issues this enables (creates "related" links)
+    #[serde(default)]
+    pub enables: Vec<String>,
+    /// Generally related issues (creates "related" links)
+    #[serde(default)]
+    pub related: Vec<String>,
+    /// Additional notes to append to description
+    pub notes: Option<String>,
 }
 
 /// Cycle specification - can be either a number or a name string
@@ -40,6 +54,16 @@ pub struct EasySendRequest {
     pub dependencies: Vec<String>,
     /// Cycle specification (number or name)
     pub cycle: Option<CycleSpec>,
+    /// Issues this one supersedes (marked as duplicates)
+    pub supersedes: Vec<String>,
+    /// Issues this builds upon (related links)
+    pub builds_on: Vec<String>,
+    /// Issues this enables (related links)
+    pub enables: Vec<String>,
+    /// Generally related issues (related links)
+    pub related: Vec<String>,
+    /// Additional notes to append to description
+    pub notes: Option<String>,
 }
 
 /// Parse input from either YAML file or stdin pipe format
@@ -81,6 +105,11 @@ pub fn parse_easy_send_input(input: &str) -> Result<EasySendRequest> {
             priority: yaml.priority,
             dependencies: yaml.dependencies,
             cycle: yaml.cycle,
+            supersedes: yaml.supersedes,
+            builds_on: yaml.builds_on,
+            enables: yaml.enables,
+            related: yaml.related,
+            notes: yaml.notes,
         });
     }
 
@@ -134,6 +163,11 @@ fn parse_pipe_format(input: &str) -> Result<EasySendRequest> {
         priority: None,
         dependencies: Vec::new(),
         cycle: None,
+        supersedes: Vec::new(),
+        builds_on: Vec::new(),
+        enables: Vec::new(),
+        related: Vec::new(),
+        notes: None,
     })
 }
 
@@ -666,5 +700,73 @@ what: |
         assert_eq!(result.assignee, "bob");
         assert_eq!(result.team, "OPS");
         assert!(result.cycle.is_none());
+    }
+
+    #[test]
+    fn test_parse_yaml_with_relation_fields() {
+        let yaml = r#"
+who: lucas@RAD
+title: Bring Snow Fortress into monorepo
+priority: 1
+supersedes:
+  - FE-177
+builds_on:
+  - PSE-22
+  - FE-143
+enables:
+  - FE-115
+related:
+  - FE-130
+  - INF-32
+notes: |
+  This is the foundation for the unified local dev experience.
+why: |
+  Snow Fortress is in a separate repo causing pain.
+what: |
+  - [ ] Create pnpm workspace
+  - [ ] Move snow-fortress code
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert_eq!(result.assignee, "lucas");
+        assert_eq!(result.team, "RAD");
+        assert_eq!(result.title, Some("Bring Snow Fortress into monorepo".to_string()));
+        assert_eq!(result.priority, Some(1));
+
+        // Check new relation fields
+        assert_eq!(result.supersedes.len(), 1);
+        assert_eq!(result.supersedes[0], "FE-177");
+
+        assert_eq!(result.builds_on.len(), 2);
+        assert_eq!(result.builds_on[0], "PSE-22");
+        assert_eq!(result.builds_on[1], "FE-143");
+
+        assert_eq!(result.enables.len(), 1);
+        assert_eq!(result.enables[0], "FE-115");
+
+        assert_eq!(result.related.len(), 2);
+        assert_eq!(result.related[0], "FE-130");
+        assert_eq!(result.related[1], "INF-32");
+
+        assert!(result.notes.is_some());
+        assert!(result.notes.as_ref().unwrap().contains("foundation"));
+    }
+
+    #[test]
+    fn test_parse_yaml_without_relation_fields() {
+        let yaml = r#"
+who: bob@OPS
+why: |
+  Simple task without relations.
+what: |
+  - [ ] Do something
+"#;
+
+        let result = parse_easy_send_input(yaml).unwrap();
+        assert!(result.supersedes.is_empty());
+        assert!(result.builds_on.is_empty());
+        assert!(result.enables.is_empty());
+        assert!(result.related.is_empty());
+        assert!(result.notes.is_none());
     }
 }

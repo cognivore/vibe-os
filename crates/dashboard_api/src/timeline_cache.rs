@@ -8,6 +8,7 @@ use core_model::domain::Domain;
 use core_model::event::EventEnvelope;
 use core_model::time::TimeWindow;
 use core_persona::store::IdentityStore;
+use futures::future::join_all;
 use tokio::sync::Mutex;
 use tokio::task;
 
@@ -71,8 +72,11 @@ impl TimelineCache {
     }
 
     pub async fn ensure_window(&self, domains: &[Domain], window: &TimeWindow) -> Result<()> {
-        for domain in domains {
-            self.ensure_domain_window(domain, window).await?;
+        let fetches = domains
+            .iter()
+            .map(|domain| self.ensure_domain_window(domain, window));
+        for result in join_all(fetches).await {
+            result?;
         }
         Ok(())
     }

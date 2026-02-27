@@ -156,6 +156,7 @@ async fn trigger_slack_sync(state: AppState) {
         Ok(()) => {
             info!("Manual Slack sync completed successfully");
             state.timeline_cache.invalidate_recent().await;
+            state.invalidate_provider_personas_cache().await;
             if let Err(e) = search::rebuild_full_index(&state).await {
                 error!("Failed to rebuild search index after manual Slack sync: {}", e);
             }
@@ -194,6 +195,7 @@ async fn trigger_linear_sync(state: AppState) {
         Ok(()) => {
             info!("Manual Linear sync completed successfully");
             state.timeline_cache.invalidate_recent().await;
+            state.invalidate_provider_personas_cache().await;
             if let Err(e) = search::rebuild_full_index(&state).await {
                 error!("Failed to rebuild search index after manual Linear sync: {}", e);
             }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { searchTimeline, type SearchQuery, type SearchHit } from "../../../api/client";
+import { streamSearch, type SearchQuery, type SearchHit } from "../../../api/client";
 import type { EventEnvelope } from "../../../types/core";
 
 export interface EventEnvelopeWithThread extends EventEnvelope {
@@ -10,82 +10,93 @@ export interface TimelineSearchState {
   results: EventEnvelopeWithThread[];
   total: number;
   loading: boolean;
+  loadingMore: boolean;
   error: string | null;
+  hasMore: boolean;
 }
 
 export interface UseTimelineSearchResult extends TimelineSearchState {
   search: (query: SearchQuery) => void;
+  loadMore: () => void;
   clear: () => void;
 }
 
 const SEARCH_DEBOUNCE_MS = 350;
+
+function enrichHits(hits: SearchHit[]): EventEnvelopeWithThread[] {
+  return hits.map((hit) => ({
+    ...hit.event,
+    thread_name: hit.thread_name,
+  }));
+}
 
 export function useTimelineSearch(): UseTimelineSearchResult {
   const [results, setResults] = useState<EventEnvelopeWithThread[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [streaming, setStreaming] = useState(false);
 
-  // Use refs to track debounce state and abort controller
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const closeRef = useRef<(() => void) | null>(null);
   const lastQueryRef = useRef<string>("");
 
-  const executeSearch = useCallback(async (query: SearchQuery) => {
-    // Abort any in-flight request
-    if (abortRef.current) {
-      abortRef.current.abort();
+  const executeSearch = useCallback((query: SearchQuery) => {
+    if (closeRef.current) {
+      closeRef.current();
+      closeRef.current = null;
     }
-
-    const controller = new AbortController();
-    abortRef.current = controller;
 
     setLoading(true);
+    setStreaming(true);
     setError(null);
+    setResults([]);
+    setTotal(0);
+    let receivedFirstPage = false;
 
-    try {
-      const response = await searchTimeline(query);
-
-      // Check if this request was aborted
-      if (controller.signal.aborted) return;
-
-      // Enrich events with thread_name from search hits
-      const enrichedEvents = response.hits.map((hit: SearchHit) => ({
-        ...hit.event,
-        thread_name: hit.thread_name,
-      }));
-      setResults(enrichedEvents);
-      setTotal(response.total);
-    } catch (err) {
-      // Ignore aborted requests
-      if (controller.signal.aborted) return;
-      setError(err instanceof Error ? err.message : "Failed to search timeline");
-    } finally {
-      if (!controller.signal.aborted) {
+    closeRef.current = streamSearch(
+      {
+        query: query.query,
+        domains: query.domains,
+        from: query.from,
+        to: query.to,
+        limit: query.limit,
+      },
+      (hits) => {
+        setResults((prev) => [...prev, ...enrichHits(hits)]);
+        if (!receivedFirstPage) {
+          receivedFirstPage = true;
+          setLoading(false);
+        }
+      },
+      (meta) => {
+        setTotal(meta.total);
+        setStreaming(false);
+        closeRef.current = null;
+      },
+      (err) => {
+        setError(err.message);
         setLoading(false);
-      }
-    }
+        setStreaming(false);
+        closeRef.current = null;
+      },
+    );
   }, []);
 
   const search = useCallback((query: SearchQuery) => {
-    // Create a stable key for this query to detect duplicates
     const queryKey = JSON.stringify(query);
 
-    // Skip if identical to last query
     if (queryKey === lastQueryRef.current) {
       return;
     }
 
-    // Clear any pending debounce
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
 
-    // Show loading state immediately
     setLoading(true);
 
-    // Debounce the actual search
     debounceRef.current = setTimeout(() => {
       lastQueryRef.current = queryKey;
       executeSearch(query);
@@ -93,17 +104,19 @@ export function useTimelineSearch(): UseTimelineSearchResult {
     }, SEARCH_DEBOUNCE_MS);
   }, [executeSearch]);
 
+  const loadMore = useCallback(() => {
+    // No-op: SSE streaming delivers all results automatically
+  }, []);
+
   const clear = useCallback(() => {
-    // Cancel any pending debounce
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
 
-    // Abort any in-flight request
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
+    if (closeRef.current) {
+      closeRef.current();
+      closeRef.current = null;
     }
 
     lastQueryRef.current = "";
@@ -111,16 +124,16 @@ export function useTimelineSearch(): UseTimelineSearchResult {
     setTotal(0);
     setError(null);
     setLoading(false);
+    setStreaming(false);
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
-      if (abortRef.current) {
-        abortRef.current.abort();
+      if (closeRef.current) {
+        closeRef.current();
       }
     };
   }, []);
@@ -129,9 +142,11 @@ export function useTimelineSearch(): UseTimelineSearchResult {
     results,
     total,
     loading,
+    loadingMore: streaming,
     error,
+    hasMore: streaming,
     search,
+    loadMore,
     clear,
   };
 }
-

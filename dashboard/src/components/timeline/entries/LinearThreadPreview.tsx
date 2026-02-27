@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { EventEnvelope, Identity, Persona } from "../../../types/core";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -19,7 +19,7 @@ interface LinearThreadPreviewProps {
   isActive?: boolean;
 }
 
-export function LinearThreadPreview({
+export const LinearThreadPreview = memo(function LinearThreadPreview({
   entry,
   identityLookup,
   personaLookup,
@@ -59,7 +59,7 @@ export function LinearThreadPreview({
     : new Date(entry.at).toLocaleString();
 
   return (
-    <li className={`p-4 ${isActive ? "bg-primary/10" : "bg-muted/10"}`}>
+    <li className={`p-4 ${isActive ? "bg-primary/10" : "bg-muted/10"}`} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 80px" }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -119,7 +119,7 @@ export function LinearThreadPreview({
       </div>
     </li>
   );
-}
+});
 
 function buildLinearEventPreview(event: EventEnvelope) {
   if (event.summary?.trim().length) {

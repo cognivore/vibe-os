@@ -267,7 +267,8 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
                 continue;
             }
             if let Some((channel_id, thread_ts)) = parse_thread_file_info(&path, None) {
-                if !thread_has_message_in_window(&path, window)? {
+                let mut events = read_thread_file(&path, &channel_id, &thread_ts, Some(window))?;
+                if events.is_empty() {
                     debug!(
                         channel_id = %channel_id,
                         thread_ts = %thread_ts,
@@ -276,7 +277,6 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
                     );
                     continue;
                 }
-                let mut events = read_thread_file(&path, &channel_id, &thread_ts, None)?;
                 debug!(
                     channel_id = %channel_id,
                     thread_ts = %thread_ts,
@@ -300,7 +300,9 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
                 if let Some((channel_id, thread_ts)) =
                     parse_thread_file_info(&nested_path, Some(&channel_id))
                 {
-                    if !thread_has_message_in_window(&nested_path, window)? {
+                    let mut events =
+                        read_thread_file(&nested_path, &channel_id, &thread_ts, Some(window))?;
+                    if events.is_empty() {
                         debug!(
                             channel_id = %channel_id,
                             thread_ts = %thread_ts,
@@ -309,7 +311,6 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
                         );
                         continue;
                     }
-                    let mut events = read_thread_file(&nested_path, &channel_id, &thread_ts, None)?;
                     debug!(
                         channel_id = %channel_id,
                         thread_ts = %thread_ts,
@@ -324,23 +325,4 @@ fn read_thread_events(dir: &Path, window: &TimeWindow) -> Result<Vec<EventEnvelo
     }
 
     Ok(envelopes)
-}
-
-fn thread_has_message_in_window(path: &Path, window: &TimeWindow) -> Result<bool> {
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let reader = BufReader::new(file);
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(record) = serde_json::from_str::<SlackMessageRecord>(&line) {
-            if let Some(at) = slack_ts_to_datetime(&record.ts) {
-                if window.contains(&at) {
-                    return Ok(true);
-                }
-            }
-        }
-    }
-    Ok(false)
 }

@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use core_model::adapters::EventAdapter;
 use core_model::domain::Domain;
 use core_operators::OperatorRegistry;
+use core_persona::provider::{LinearProviderPersona, SlackProviderPersona};
 use core_persona::store::IdentityStore;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -90,6 +91,17 @@ pub struct AppState {
     pub(crate) search: SearchService,
     pub(crate) timeline_cache: Arc<TimelineCache>,
     pub(crate) sync_state: Arc<Mutex<SyncState>>,
+    pub(crate) provider_personas_cache: Arc<Mutex<Option<ProviderPersonasCacheEntry>>>,
+}
+
+pub type ProviderPersonasCacheEntry =
+    (Instant, Vec<SlackProviderPersona>, Vec<LinearProviderPersona>);
+
+impl AppState {
+    pub async fn invalidate_provider_personas_cache(&self) {
+        let mut cache = self.provider_personas_cache.lock().await;
+        *cache = None;
+    }
 }
 
 #[derive(Clone, Serialize)]

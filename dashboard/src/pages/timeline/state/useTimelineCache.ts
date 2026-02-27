@@ -405,6 +405,62 @@ export function refreshRangeTimestamp(range: TimelineWindow): void {
 }
 
 /**
+ * Finalize an SSE streaming snapshot by recording the cursor and marking
+ * the window as a cached range. Events are already in the cache from
+ * appendStreamingEvents calls.
+ */
+export function finalizeStreamingSnapshot(
+  domains: string[],
+  window: TimelineWindowResponse,
+  cursor: number,
+): void {
+  const nextWindow = toTimelineWindow(window);
+  const domainsKey = selectionKeyForDomains(domains);
+  const cachedRange: CachedRange = {
+    from: nextWindow.from,
+    to: nextWindow.to,
+    fetchedAt: Date.now(),
+  };
+  setState((prev) => {
+    if (prev.domainsKey !== domainsKey) return prev;
+    return {
+      ...prev,
+      cursor,
+      window: nextWindow,
+      cachedRanges: mergeRanges([...prev.cachedRanges, cachedRange]),
+    };
+  });
+}
+
+/**
+ * Append a page of events during SSE streaming without finalizing range tracking.
+ * Each call merges the incoming batch into the current cache, making them
+ * immediately visible in the DOM. Range and cursor finalization happens via
+ * commitTimelineSnapshot once the stream's `done` event arrives.
+ */
+export function appendStreamingEvents(
+  domains: string[],
+  window: TimelineWindow,
+  events: EventEnvelope[],
+): void {
+  const domainsKey = selectionKeyForDomains(domains);
+  setState((prev) => {
+    const isNewStream = prev.domainsKey !== domainsKey;
+    const base = isNewStream ? [] : prev.events;
+    const nextEvents = mergeEvents(base, events);
+    const eventsFingerprint = computeFingerprint(nextEvents);
+    return {
+      ...prev,
+      domainsKey,
+      window,
+      events: nextEvents,
+      eventsFingerprint,
+      cachedRanges: isNewStream ? [] : prev.cachedRanges,
+    };
+  });
+}
+
+/**
  * Get the current cache state (for reading outside of React).
  */
 export function getTimelineCacheState(): TimelineCacheState {

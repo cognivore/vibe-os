@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { format, formatDistanceToNow } from "date-fns";
 import { Button } from "../components/ui/button";
@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { ScrollArea } from "../components/ui/scroll-area";
 import { TimelineEntryList } from "../components/timeline/TimelineEntryList";
 import type { PersonaClickTarget, TimelineEntry } from "../components/timeline/types";
+import { buildSlackUserLookup } from "../components/timeline/entries/EventEntry";
 import {
   useTimelineWindow,
   defaultTimelineWindow,
@@ -208,6 +209,14 @@ export default function TimelinePage() {
     }
   };
 
+  const userLookup = useMemo(
+    () => buildSlackUserLookup(
+      Object.values(timelineState.identityLookup),
+      timelineState.providerPersonaLabels,
+    ),
+    [timelineState.identityLookup, timelineState.providerPersonaLabels],
+  );
+
   const selectedAdapter = useMemo(() => {
     if (!threadState.selectedThread) return null;
     return threadAdapters.find((adapter) =>
@@ -371,21 +380,28 @@ export default function TimelinePage() {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
         <ScrollArea className="h-[65vh] rounded-lg border border-border bg-card">
-          {(timelineState.loading || searchState.loading) ? (
-            <div className="p-6 text-sm text-muted-foreground">Loading...</div>
-          ) : searchState.error ? (
+          {searchState.error && (
             <div className="p-6 text-sm text-destructive">{searchState.error}</div>
-          ) : (
-            <TimelineEntryList
-              entries={displayEntries}
-              domainLookup={timelineState.domainLookup}
-              identityLookup={timelineState.identityLookup}
-              personaLookup={timelineState.personaLookup}
-              providerPersonaLabels={timelineState.providerPersonaLabels}
-              onPersonaClick={handlePersonaClick}
-              onThreadSelect={threadState.selectThread}
-              activeThreadKey={activeThreadKey}
-              isSearchMode={isSearchMode}
+          )}
+          <TimelineEntryList
+            entries={displayEntries}
+            domainLookup={timelineState.domainLookup}
+            identityLookup={timelineState.identityLookup}
+            personaLookup={timelineState.personaLookup}
+            providerPersonaLabels={timelineState.providerPersonaLabels}
+            userLookup={userLookup}
+            onPersonaClick={handlePersonaClick}
+            onThreadSelect={threadState.selectThread}
+            activeThreadKey={activeThreadKey}
+            isSearchMode={isSearchMode}
+          />
+          {displayEntries.length === 0 && (timelineState.loading || searchState.loading) && (
+            <div className="p-6 text-sm text-muted-foreground">Loading...</div>
+          )}
+          {isSearchMode && searchState.hasMore && (
+            <LoadMoreSentinel
+              loading={searchState.loadingMore}
+              onLoadMore={searchState.loadMore}
             />
           )}
         </ScrollArea>
@@ -413,6 +429,38 @@ export default function TimelinePage() {
           </div>
         </ScrollArea>
       </div>
+    </div>
+  );
+}
+
+function LoadMoreSentinel({ loading, onLoadMore }: { loading: boolean; onLoadMore: () => void }) {
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !loading) {
+          onLoadMore();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loading, onLoadMore]);
+
+  return (
+    <div ref={sentinelRef} className="flex items-center justify-center p-4">
+      {loading ? (
+        <span className="text-sm text-muted-foreground">Loading more...</span>
+      ) : (
+        <Button variant="ghost" size="sm" onClick={onLoadMore}>
+          Load more results
+        </Button>
+      )}
     </div>
   );
 }

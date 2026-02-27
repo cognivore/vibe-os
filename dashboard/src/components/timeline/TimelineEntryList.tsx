@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Arrow, Identity, Persona } from "../../types/core";
 import { Badge } from "../ui/badge";
 import type {
@@ -17,6 +18,7 @@ interface TimelineEntryListProps {
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
   providerPersonaLabels?: Record<string, string>;
+  userLookup?: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
   onThreadSelect?: (thread: SlackThreadEntry | LinearThreadEntry) => void;
   activeThreadKey?: string;
@@ -29,6 +31,7 @@ export function TimelineEntryList({
   identityLookup,
   personaLookup,
   providerPersonaLabels = {},
+  userLookup = {},
   onPersonaClick,
   onThreadSelect,
   activeThreadKey,
@@ -45,6 +48,7 @@ export function TimelineEntryList({
               identityLookup={identityLookup}
               personaLookup={personaLookup}
               providerPersonaLabels={providerPersonaLabels}
+              userLookup={userLookup}
               onPersonaClick={onPersonaClick}
               onThreadClick={onThreadSelect}
             />
@@ -60,6 +64,7 @@ export function TimelineEntryList({
               identityLookup={identityLookup}
               personaLookup={personaLookup}
               providerPersonaLabels={providerPersonaLabels}
+              userLookup={userLookup}
               onPersonaClick={onPersonaClick}
               onThreadSelect={onThreadSelect}
               isActive={activeThreadKey === `slack:${entry.threadId}`}
@@ -110,7 +115,7 @@ interface ArrowEntryProps {
   onPersonaClick?: (target: PersonaClickTarget) => void;
 }
 
-function ArrowEntry({
+const ArrowEntry = memo(function ArrowEntry({
   arrow,
   domainLookup,
   identityLookup,
@@ -128,7 +133,7 @@ function ArrowEntry({
       : arrow.target.domain;
 
   return (
-    <li className="bg-muted/20 p-4">
+    <li className="bg-muted/20 p-4" style={{ contentVisibility: "auto", containIntrinsicSize: "auto 80px" }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="space-y-1">
           <Badge>{arrow.direction.replace("_", " ")}</Badge>
@@ -153,5 +158,5 @@ function ArrowEntry({
       </p>
     </li>
   );
-}
+});
 

@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 
 use super::schema::SearchSchema;
 
-const MAX_LIMIT: usize = 200;
+const MAX_LIMIT: usize = 1000;
 
 #[derive(Clone)]
 pub struct SearchService {

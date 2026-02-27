@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type {
   EventEnvelope,
   Identity,
@@ -19,15 +20,17 @@ interface EventEntryProps {
   identityLookup: Record<string, Identity>;
   personaLookup: Record<string, { persona: Persona; identityId: string }>;
   providerPersonaLabels?: Record<string, string>;
+  userLookup?: Record<string, string>;
   onPersonaClick?: (target: PersonaClickTarget) => void;
   onThreadClick?: (thread: SlackThreadEntry | LinearThreadEntry) => void;
 }
 
-export function EventEntry({
+export const EventEntry = memo(function EventEntry({
   event,
   identityLookup,
   personaLookup,
   providerPersonaLabels = {},
+  userLookup = {},
   onPersonaClick,
   onThreadClick,
 }: EventEntryProps) {
@@ -41,13 +44,8 @@ export function EventEntry({
     }
   };
 
-  const userLookup = buildSlackUserLookup(
-    Object.values(identityLookup),
-    providerPersonaLabels,
-  );
-
   return (
-    <li className="p-4">
+    <li className="p-4" style={{ contentVisibility: "auto", containIntrinsicSize: "auto 80px" }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="space-y-1">
           <Badge variant="secondary">{event.domain}</Badge>
@@ -97,7 +95,7 @@ export function EventEntry({
       </div>
     </li>
   );
-}
+});
 
 /**
  * Extract a minimal thread entry from an event for navigation purposes.

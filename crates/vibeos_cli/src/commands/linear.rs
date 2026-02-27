@@ -125,6 +125,20 @@ pub enum LinearCommand {
         #[arg(long)]
         confirm: bool,
     },
+    /// Edit issue state, priority, or assignee by identifier
+    EditIssue {
+        /// Issue identifier (e.g., INF-83, NIN-104)
+        identifier: String,
+        /// Move to state: backlog, todo, in-progress, in-review, done, canceled
+        #[arg(long)]
+        state: Option<String>,
+        /// Set priority: 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low
+        #[arg(long)]
+        priority: Option<i32>,
+        /// Assign to user (name substring match)
+        #[arg(long)]
+        assignee: Option<String>,
+    },
 }
 
 #[async_trait]
@@ -283,6 +297,16 @@ impl CliCommand for LinearCommand {
                 let dependencies =
                     easy_send::match_issue_identifiers(&request.dependencies, &issues)?;
 
+                // Match all relation identifiers (validate before creating issue)
+                let supersedes =
+                    easy_send::match_issue_identifiers(&request.supersedes, &issues)?;
+                let builds_on =
+                    easy_send::match_issue_identifiers(&request.builds_on, &issues)?;
+                let enables =
+                    easy_send::match_issue_identifiers(&request.enables, &issues)?;
+                let related =
+                    easy_send::match_issue_identifiers(&request.related, &issues)?;
+
                 // Match cycle if specified (must be for the same team)
                 let cycle_id = request
                     .cycle
@@ -290,8 +314,15 @@ impl CliCommand for LinearCommand {
                     .map(|spec| easy_send::match_cycle(spec, &team_id, &issues))
                     .transpose()?;
 
-                // Compose the description
-                let description = format!("# Why\n\n{}\n\n# What\n\n{}", request.why, request.what);
+                // Compose the description, including notes if provided
+                let description = if let Some(ref notes) = request.notes {
+                    format!(
+                        "# Why\n\n{}\n\n# What\n\n{}\n\n# Notes\n\n{}",
+                        request.why, request.what, notes.trim()
+                    )
+                } else {
+                    format!("# Why\n\n{}\n\n# What\n\n{}", request.why, request.what)
+                };
 
                 // Use explicit title if provided, otherwise create from first line of "why"
                 let title = match request.title {
@@ -342,6 +373,42 @@ impl CliCommand for LinearCommand {
                         .await
                         .with_context(|| format!("Failed to add dependency on {}", identifier))?;
                     println!("  Dependency: {} (blocks this issue)", identifier);
+                }
+
+                // Create supersedes relations: old issue is marked as duplicate of new issue
+                for (identifier, old_issue_id) in &supersedes {
+                    client
+                        .create_issue_relation_typed(&old_issue_id, &issue.id, "duplicate")
+                        .await
+                        .with_context(|| format!("Failed to mark {} as superseded", identifier))?;
+                    println!("  Supersedes: {} (marked as duplicate)", identifier);
+                }
+
+                // Create builds_on relations: bidirectional "related" links
+                for (identifier, related_issue_id) in &builds_on {
+                    client
+                        .create_issue_relation_typed(&issue.id, &related_issue_id, "related")
+                        .await
+                        .with_context(|| format!("Failed to link builds_on {}", identifier))?;
+                    println!("  Builds on: {} (related)", identifier);
+                }
+
+                // Create enables relations: bidirectional "related" links
+                for (identifier, related_issue_id) in &enables {
+                    client
+                        .create_issue_relation_typed(&issue.id, &related_issue_id, "related")
+                        .await
+                        .with_context(|| format!("Failed to link enables {}", identifier))?;
+                    println!("  Enables: {} (related)", identifier);
+                }
+
+                // Create general related links
+                for (identifier, related_issue_id) in &related {
+                    client
+                        .create_issue_relation_typed(&issue.id, &related_issue_id, "related")
+                        .await
+                        .with_context(|| format!("Failed to link related {}", identifier))?;
+                    println!("  Related: {} (related)", identifier);
                 }
 
                 Ok(())
@@ -461,6 +528,108 @@ impl CliCommand for LinearCommand {
                 }
 
                 println!("\nDone. Run `linear sync` to update local mirror.");
+                Ok(())
+            }
+            LinearCommand::EditIssue {
+                identifier,
+                state,
+                priority,
+                assignee,
+            } => {
+                let cfg = ctx.config()?;
+
+                // Load issues to find the target and resolve references
+                let issues = linear_analysis::load_issues(&cfg.linear_mirror_dir)?;
+                let issue = issues
+                    .iter()
+                    .find(|i| i.identifier == *identifier)
+                    .context(format!(
+                        "Issue {} not found in mirror. Run `linear sync` first.",
+                        identifier
+                    ))?;
+
+                // Resolve state name to state ID (must be from the same team)
+                let state_id = if let Some(state_name) = state {
+                    let state_needle = state_name.to_lowercase().replace('-', " ");
+                    let team_states: Vec<_> = issues
+                        .iter()
+                        .filter(|i| i.team_id == issue.team_id)
+                        .filter_map(|i| {
+                            i.state_id.as_ref().zip(i.state_name.as_ref())
+                        })
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+
+                    let matching: Vec<_> = team_states
+                        .iter()
+                        .filter(|(_, name)| name.to_lowercase().contains(&state_needle))
+                        .collect();
+
+                    if matching.is_empty() {
+                        let available: Vec<_> = team_states.iter().map(|(_, n)| n.as_str()).collect();
+                        anyhow::bail!(
+                            "State '{}' not found. Available: {}",
+                            state_name,
+                            available.join(", ")
+                        );
+                    }
+                    if matching.len() > 1 {
+                        let names: Vec<_> = matching.iter().map(|(_, n)| n.as_str()).collect();
+                        anyhow::bail!(
+                            "Ambiguous state '{}'. Matches: {}",
+                            state_name,
+                            names.join(", ")
+                        );
+                    }
+                    Some(matching[0].0.clone())
+                } else {
+                    None
+                };
+
+                // Resolve assignee name to assignee ID
+                let assignee_id = if let Some(assignee_name) = assignee {
+                    let aid = easy_send::match_assignee(assignee_name, &issues)?;
+                    Some(aid)
+                } else {
+                    None
+                };
+
+                // Make the API call
+                let api_key = config::linear_api_key()?;
+                let client = linear::LinearClient::new(api_key);
+                let updated = client
+                    .edit_issue(
+                        &issue.id,
+                        state_id.as_deref(),
+                        *priority,
+                        assignee_id.as_deref(),
+                    )
+                    .await?;
+
+                println!("Updated issue {} (id={})", updated.identifier, updated.id);
+                if let Some(ref s) = state {
+                    println!("  State: {}", s);
+                }
+                if let Some(p) = priority {
+                    let prio_name = match p {
+                        0 => "No priority",
+                        1 => "Urgent",
+                        2 => "High",
+                        3 => "Normal",
+                        4 => "Low",
+                        _ => "Unknown",
+                    };
+                    println!("  Priority: {} ({})", p, prio_name);
+                }
+                if let Some(ref a) = assignee {
+                    println!("  Assignee: {}", a);
+                }
+                if let Some(url) = updated.url {
+                    println!("  URL: {}", url);
+                }
+
+                println!("\nRun `linear sync` to update local mirror.");
                 Ok(())
             }
         }

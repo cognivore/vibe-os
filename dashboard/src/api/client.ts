@@ -306,6 +306,126 @@ export async function reindexSearch(): Promise<void> {
   return request("/api/search/reindex", { method: "POST" });
 }
 
+export interface StreamEventsParams {
+  domains?: string[];
+  from: string;
+  to: string;
+}
+
+export interface StreamEventsDoneMeta {
+  cursor: number;
+  window: { from: string; to: string };
+  total_events: number;
+}
+
+export function streamEvents(
+  params: StreamEventsParams,
+  onPage: (events: EventEnvelope[]) => void,
+  onDone: (meta: StreamEventsDoneMeta) => void,
+  onError: (err: Error) => void,
+): () => void {
+  const url = new URL(`${API_ROOT}/api/events/stream`);
+  if (params.domains?.length) {
+    url.searchParams.set("domains", params.domains.join(","));
+  }
+  url.searchParams.set("from", params.from);
+  url.searchParams.set("to", params.to);
+
+  const source = new EventSource(url.toString());
+  let closed = false;
+
+  source.addEventListener("page", (e) => {
+    try {
+      const data = JSON.parse(e.data) as { events: EventEnvelope[]; page_index: number };
+      onPage(data.events);
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
+
+  source.addEventListener("done", (e) => {
+    closed = true;
+    try {
+      const meta = JSON.parse(e.data) as StreamEventsDoneMeta;
+      onDone(meta);
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      source.close();
+    }
+  });
+
+  source.onerror = () => {
+    if (closed) return;
+    onError(new Error("SSE connection error for events stream"));
+    source.close();
+  };
+
+  return () => {
+    closed = true;
+    source.close();
+  };
+}
+
+export interface StreamSearchParams {
+  query: string;
+  domains?: string[];
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
+export function streamSearch(
+  params: StreamSearchParams,
+  onPage: (hits: SearchHit[]) => void,
+  onDone: (meta: { total: number }) => void,
+  onError: (err: Error) => void,
+): () => void {
+  const url = new URL(`${API_ROOT}/api/search/stream`);
+  url.searchParams.set("q", params.query);
+  if (params.domains?.length) {
+    url.searchParams.set("domains", params.domains.join(","));
+  }
+  if (params.from) url.searchParams.set("from", params.from);
+  if (params.to) url.searchParams.set("to", params.to);
+  if (params.limit) url.searchParams.set("limit", params.limit.toString());
+
+  const source = new EventSource(url.toString());
+  let closed = false;
+
+  source.addEventListener("page", (e) => {
+    try {
+      const data = JSON.parse(e.data) as { hits: SearchHit[]; page_index: number };
+      onPage(data.hits);
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
+
+  source.addEventListener("done", (e) => {
+    closed = true;
+    try {
+      const meta = JSON.parse(e.data) as { total: number };
+      onDone(meta);
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      source.close();
+    }
+  });
+
+  source.onerror = () => {
+    if (closed) return;
+    onError(new Error("SSE connection error for search stream"));
+    source.close();
+  };
+
+  return () => {
+    closed = true;
+    source.close();
+  };
+}
+
 // Linear Dashboard API
 
 export interface CycleHistoryEntry {

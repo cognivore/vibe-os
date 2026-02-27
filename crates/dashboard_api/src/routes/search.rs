@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::Json;
 use core_model::event::EventEnvelope;
 use core_types::Domain;
@@ -68,6 +70,60 @@ pub async fn execute_search(
     Ok(Json(result.into()))
 }
 
+const STREAM_PAGE_SIZE: usize = 100;
+
+pub async fn stream_search(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, AppError> {
+    let mut request = SearchRequest::default();
+    request.query = query.q.unwrap_or_default();
+    request.limit = query.limit.unwrap_or(1000);
+    request.offset = query.offset.unwrap_or(0);
+    request.domains = parse_domains_csv(query.domains.as_deref()).unwrap_or_default();
+    request.window = match (query.from.as_deref(), query.to.as_deref()) {
+        (Some(from), Some(to)) => Some(build_window(from, to)?),
+        _ => None,
+    };
+
+    let search = state.search.clone();
+    let mut result = tokio::task::spawn_blocking(move || search.search(request))
+        .await
+        .map_err(AppError::from)??;
+
+    enrich_slack_thread_names(&mut result, &state).await;
+
+    let total = result.total;
+    let pages: Vec<Vec<SearchHitResponse>> = result
+        .hits
+        .chunks(STREAM_PAGE_SIZE)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|hit| SearchHitResponse {
+                    event: hit.event.clone(),
+                    thread_name: hit.thread_name.clone(),
+                })
+                .collect()
+        })
+        .collect();
+
+    let event_stream = stream::iter(pages.into_iter().enumerate().map(|(idx, hits)| {
+        let payload = serde_json::json!({ "hits": hits, "page_index": idx });
+        Ok(Event::default()
+            .event("page")
+            .data(payload.to_string()))
+    }))
+    .chain(stream::once(async move {
+        let payload = serde_json::json!({ "total": total });
+        Ok(Event::default()
+            .event("done")
+            .data(payload.to_string()))
+    }));
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
+}
+
 pub async fn reindex(State(state): State<AppState>) -> Result<Json<ReindexResponse>, AppError> {
     let indexed_events = rebuild_full_index(&state).await?;
     Ok(Json(ReindexResponse { indexed_events }))
@@ -107,33 +163,56 @@ async fn enrich_slack_thread_names(result: &mut SearchResult, state: &AppState) 
         }
     }
 
-    // For each thread, try to load the root message
-    let adapter = SlackAdapter::new(state.slack_mirror_dir.as_ref());
+    let updates: Vec<(Vec<usize>, String)> = stream::iter(thread_groups.into_iter())
+        .map(|(entity_id, indices)| {
+            let slack_mirror_dir = Arc::clone(&state.slack_mirror_dir);
+            async move {
+                let parts: Vec<&str> = entity_id.split(':').collect();
+                if parts.len() != 2 {
+                    return None;
+                }
+                let channel_id = parts[0].to_string();
+                let thread_ts = parts[1].replace('_', ".");
+                let thread_ts_for_lookup = thread_ts.clone();
+                let mirror_dir = slack_mirror_dir.as_ref().clone();
 
-    for (entity_id, indices) in thread_groups {
-        // Parse entity_id: "channel_id:thread_ts"
-        let parts: Vec<&str> = entity_id.split(':').collect();
-        if parts.len() != 2 {
-            continue;
-        }
-        let channel_id = parts[0];
-        let thread_ts = parts[1].replace('_', ".");
+                let load_result = tokio::task::spawn_blocking(move || {
+                    let adapter = SlackAdapter::new(&mirror_dir);
+                    adapter.load_thread(&channel_id, &thread_ts_for_lookup)
+                })
+                .await;
 
-        // Load the thread from the adapter
-        match adapter.load_thread(channel_id, &thread_ts) {
-            Ok(events) => {
-                // Find the root message (ts == thread_ts)
-                if let Some(root_text) = find_root_message_text(&events, &thread_ts) {
-                    // Apply this text to all hits in this thread
-                    for &idx in &indices {
-                        if let Some(hit) = result.hits.get_mut(idx) {
-                            hit.thread_name = Some(root_text.clone());
-                        }
+                match load_result {
+                    Ok(Ok(events)) => find_root_message_text(&events, &thread_ts)
+                        .map(|root_text| (indices, root_text)),
+                    Ok(Err(err)) => {
+                        tracing::debug!(
+                            "Failed to load thread {} for enrichment: {}",
+                            entity_id,
+                            err
+                        );
+                        None
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            "Thread enrichment task failed for {}: {}",
+                            entity_id,
+                            err
+                        );
+                        None
                     }
                 }
             }
-            Err(e) => {
-                tracing::debug!("Failed to load thread {} for enrichment: {}", entity_id, e);
+        })
+        .buffer_unordered(MAX_CONCURRENT_TITLE_LOOKUPS)
+        .filter_map(|item| async move { item })
+        .collect()
+        .await;
+
+    for (indices, root_text) in updates {
+        for idx in indices {
+            if let Some(hit) = result.hits.get_mut(idx) {
+                hit.thread_name = Some(root_text.clone());
             }
         }
     }

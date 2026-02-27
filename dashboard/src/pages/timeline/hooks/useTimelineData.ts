@@ -14,14 +14,15 @@ import type {
   Persona,
   ProviderPersonasPayload,
 } from "../../../types/core";
-import { getProviderPersonas } from "../../../api/client";
+import { getProviderPersonas, streamEvents } from "../../../api/client";
 import {
+  appendStreamingEvents,
   cacheMatchesDomains,
   commitRangeEvents,
   commitTimelineDelta,
-  commitTimelineSnapshot,
   computeMissingRanges,
   filterEventsToWindow,
+  finalizeStreamingSnapshot,
   rangesContainWindow,
   selectionKeyForDomains,
   useTimelineCacheStore,
@@ -107,6 +108,7 @@ export function useTimelineData({
   // Track fetching state for incremental range fetches
   const rangesFetchedRef = useRef<Set<string>>(new Set());
   const rangesInFlightRef = useRef<Set<string>>(new Set());
+  const streamingRef = useRef(false);
   const providerPersonasFetchedRef = useRef(false);
 
   // Reset fetch tracking when domains change
@@ -189,49 +191,52 @@ export function useTimelineData({
       return;
     }
 
+    if (streamingRef.current) return;
+
     // If cache fully covers the window, no fetch needed
     if (cacheCoversWindow) {
       setEventsLoading(false);
       return;
     }
 
-    // If domains don't match, we need a full snapshot for the requested window
+    // If domains don't match, we need a full snapshot via SSE streaming
     if (!domainsMatch) {
       const snapshotKey = `snapshot:${selectedDomainsKey}:${window.from}:${window.to}`;
       if (rangesInFlightRef.current.has(snapshotKey)) return;
 
-      let cancelled = false;
       rangesInFlightRef.current.add(snapshotKey);
+      streamingRef.current = true;
       setEventsLoading(true);
       setError(null);
+      let receivedFirstPage = false;
 
-      dataSource
-        .fetchEvents({
-          domains: stableDomains,
-          window,
-        })
-        .then((response) => {
-          if (cancelled) return;
-          if (response.mode !== "snapshot") {
-            throw new Error("Expected snapshot response");
-          }
-          commitTimelineSnapshot(stableDomains, response.window, response.cursor, response.events);
-          rangesFetchedRef.current.add(snapshotKey);
-        })
-        .catch((err) => {
-          if (!cancelled) {
-            setError(err instanceof Error ? err.message : String(err));
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
+      const close = streamEvents(
+        { domains: stableDomains, from: window.from, to: window.to },
+        (pageEvents) => {
+          appendStreamingEvents(stableDomains, window, pageEvents);
+          if (!receivedFirstPage) {
+            receivedFirstPage = true;
             setEventsLoading(false);
           }
+        },
+        (meta) => {
+          streamingRef.current = false;
+          finalizeStreamingSnapshot(stableDomains, meta.window, meta.cursor);
+          rangesFetchedRef.current.add(snapshotKey);
           rangesInFlightRef.current.delete(snapshotKey);
-        });
+        },
+        (err) => {
+          streamingRef.current = false;
+          setError(err.message);
+          setEventsLoading(false);
+          rangesInFlightRef.current.delete(snapshotKey);
+        },
+      );
 
       return () => {
-        cancelled = true;
+        close();
+        streamingRef.current = false;
+        rangesInFlightRef.current.delete(snapshotKey);
       };
     }
 

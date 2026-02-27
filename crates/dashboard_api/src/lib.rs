@@ -74,6 +74,7 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
         search: search_service.clone(),
         timeline_cache: timeline_cache.clone(),
         sync_state,
+        provider_personas_cache: Arc::new(Mutex::new(None)),
     };
 
     spawn_periodic_reindex(state.clone());
@@ -189,6 +190,7 @@ async fn background_slack_sync(token: String, mirror_dir: PathBuf, state: AppSta
                 info!("Background Slack sync completed successfully");
                 // Invalidate timeline cache for recent window to pick up new data
                 state.timeline_cache.invalidate_recent().await;
+                state.invalidate_provider_personas_cache().await;
                 // Trigger immediate reindex after successful sync
                 match search::rebuild_full_index(&state).await {
                     Ok(count) => info!(count, "Search index rebuilt after Slack sync"),
@@ -259,6 +261,7 @@ async fn background_linear_sync(api_key: String, mirror_dir: PathBuf, state: App
                 info!("Background Linear sync completed successfully");
                 // Invalidate timeline cache for recent window to pick up new data
                 state.timeline_cache.invalidate_recent().await;
+                state.invalidate_provider_personas_cache().await;
                 // Trigger immediate reindex after successful sync
                 match search::rebuild_full_index(&state).await {
                     Ok(count) => info!(count, "Search index rebuilt after Linear sync"),
