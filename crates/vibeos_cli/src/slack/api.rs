@@ -8,9 +8,8 @@ use super::types::{
     ChatPostMessageResponse, ChatUpdateResponse, ConversationsHistoryResponse,
     ConversationsJoinResponse, ConversationsListResponse, ConversationsRepliesResponse,
     ResponseMetadata, SlackConversation, SlackMessage, UsersListResponse, API_BASE,
-    CHAT_POST_MESSAGE, CHAT_UPDATE, CONVERSATIONS_HISTORY, CONVERSATIONS_JOIN,
-    CONVERSATIONS_LIST, CONVERSATIONS_REPLIES, CONVERSATION_TYPES, DEFAULT_RETRY_AFTER_SECS,
-    USERS_LIST,
+    CHAT_POST_MESSAGE, CHAT_UPDATE, CONVERSATIONS_HISTORY, CONVERSATIONS_JOIN, CONVERSATIONS_LIST,
+    CONVERSATIONS_REPLIES, CONVERSATION_TYPES, DEFAULT_RETRY_AFTER_SECS, USERS_LIST,
 };
 
 impl SlackClient {
@@ -276,10 +275,50 @@ impl SlackClient {
     }
 
     pub(super) async fn post_message(&self, channel: &str, text: &str) -> Result<String> {
-        let body = serde_json::json!({
+        self.post_message_with_options(channel, text, None, false, None)
+            .await
+    }
+
+    pub(super) async fn post_thread_message(
+        &self,
+        channel: &str,
+        thread_ts: &str,
+        text: &str,
+        reply_broadcast: bool,
+        blocks: Option<Value>,
+    ) -> Result<String> {
+        self.post_message_with_options(channel, text, Some(thread_ts), reply_broadcast, blocks)
+            .await
+    }
+
+    async fn post_message_with_options(
+        &self,
+        channel: &str,
+        text: &str,
+        thread_ts: Option<&str>,
+        reply_broadcast: bool,
+        blocks: Option<Value>,
+    ) -> Result<String> {
+        let mut body = serde_json::json!({
             "channel": channel,
             "text": text,
         });
+        let payload = body
+            .as_object_mut()
+            .context("Slack message payload must be a JSON object")?;
+
+        if let Some(thread_ts) = thread_ts {
+            payload.insert("thread_ts".into(), Value::String(thread_ts.to_owned()));
+            if reply_broadcast {
+                payload.insert("reply_broadcast".into(), Value::Bool(true));
+            }
+        }
+
+        if let Some(blocks) = blocks {
+            payload.insert("blocks".into(), blocks);
+            payload.insert("unfurl_links".into(), Value::Bool(false));
+            payload.insert("unfurl_media".into(), Value::Bool(false));
+        }
 
         let response = self
             .execute_request(
@@ -307,12 +346,7 @@ impl SlackClient {
             .ok_or_else(|| anyhow::anyhow!("chat.postMessage response missing ts"))
     }
 
-    pub(super) async fn update_message(
-        &self,
-        channel: &str,
-        ts: &str,
-        text: &str,
-    ) -> Result<()> {
+    pub(super) async fn update_message(&self, channel: &str, ts: &str, text: &str) -> Result<()> {
         let body = serde_json::json!({
             "channel": channel,
             "ts": ts,
