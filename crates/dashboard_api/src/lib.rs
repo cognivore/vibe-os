@@ -230,7 +230,17 @@ pub async fn run_slack_sync(token: &str, mirror_dir: &Path) -> Result<()> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         error!("Slack sync stderr: {}", stderr);
-        error!("Slack sync stdout (last 500 chars): {}", stdout.chars().rev().take(500).collect::<String>().chars().rev().collect::<String>());
+        error!(
+            "Slack sync stdout (last 500 chars): {}",
+            stdout
+                .chars()
+                .rev()
+                .take(500)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
+        );
         anyhow::bail!("Slack mirror sync exited with status: {}", output.status);
     }
 

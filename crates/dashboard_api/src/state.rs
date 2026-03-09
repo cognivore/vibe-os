@@ -94,8 +94,11 @@ pub struct AppState {
     pub(crate) provider_personas_cache: Arc<Mutex<Option<ProviderPersonasCacheEntry>>>,
 }
 
-pub type ProviderPersonasCacheEntry =
-    (Instant, Vec<SlackProviderPersona>, Vec<LinearProviderPersona>);
+pub type ProviderPersonasCacheEntry = (
+    Instant,
+    Vec<SlackProviderPersona>,
+    Vec<LinearProviderPersona>,
+);
 
 impl AppState {
     pub async fn invalidate_provider_personas_cache(&self) {

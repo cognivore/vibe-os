@@ -79,9 +79,7 @@ pub async fn trigger_sync(
 
     // Check if sync is already in progress
     if sync_state.is_any_sync_in_progress() {
-        return Err(AppError(anyhow::anyhow!(
-            "A sync is already in progress"
-        )));
+        return Err(AppError(anyhow::anyhow!("A sync is already in progress")));
     }
 
     let mut triggered = Vec::new();
@@ -158,7 +156,10 @@ async fn trigger_slack_sync(state: AppState) {
             state.timeline_cache.invalidate_recent().await;
             state.invalidate_provider_personas_cache().await;
             if let Err(e) = search::rebuild_full_index(&state).await {
-                error!("Failed to rebuild search index after manual Slack sync: {}", e);
+                error!(
+                    "Failed to rebuild search index after manual Slack sync: {}",
+                    e
+                );
             }
         }
         Err(e) => error!("Manual Slack sync failed: {}", e),
@@ -197,7 +198,10 @@ async fn trigger_linear_sync(state: AppState) {
             state.timeline_cache.invalidate_recent().await;
             state.invalidate_provider_personas_cache().await;
             if let Err(e) = search::rebuild_full_index(&state).await {
-                error!("Failed to rebuild search index after manual Linear sync: {}", e);
+                error!(
+                    "Failed to rebuild search index after manual Linear sync: {}",
+                    e
+                );
             }
         }
         Err(e) => error!("Manual Linear sync failed: {}", e),

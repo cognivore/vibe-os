@@ -315,10 +315,7 @@ pub fn match_cycle(
 
     match cycle_spec {
         CycleSpec::Number(num) => {
-            let matching: Vec<_> = cycles
-                .iter()
-                .filter(|(n, _, _)| *n == Some(*num))
-                .collect();
+            let matching: Vec<_> = cycles.iter().filter(|(n, _, _)| *n == Some(*num)).collect();
 
             if matching.is_empty() {
                 let available: Vec<String> = cycles
@@ -385,11 +382,7 @@ pub fn match_cycle(
                         })
                     })
                     .collect();
-                bail!(
-                    "Ambiguous cycle '{}'. Matches: {}",
-                    name,
-                    names.join(", ")
-                );
+                bail!("Ambiguous cycle '{}'. Matches: {}", name, names.join(", "));
             }
 
             Ok(matching[0].2.to_string())
@@ -730,7 +723,10 @@ what: |
         let result = parse_easy_send_input(yaml).unwrap();
         assert_eq!(result.assignee, "lucas");
         assert_eq!(result.team, "RAD");
-        assert_eq!(result.title, Some("Bring Snow Fortress into monorepo".to_string()));
+        assert_eq!(
+            result.title,
+            Some("Bring Snow Fortress into monorepo".to_string())
+        );
         assert_eq!(result.priority, Some(1));
 
         // Check new relation fields

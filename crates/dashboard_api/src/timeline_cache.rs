@@ -178,7 +178,9 @@ impl TimelineCache {
             cache.last_fetch = None;
 
             // Remove events in the recent window so they get re-fetched
-            cache.entries.retain(|entry| entry.event.at < recent_threshold);
+            cache
+                .entries
+                .retain(|entry| entry.event.at < recent_threshold);
 
             // Shrink coverage to exclude recent window
             if let Some(ref mut coverage) = cache.coverage {

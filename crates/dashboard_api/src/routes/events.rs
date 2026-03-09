@@ -227,9 +227,7 @@ pub async fn stream_events(
 
     let event_stream = stream::iter(pages.into_iter().enumerate().map(|(idx, events)| {
         let payload = serde_json::json!({ "events": events, "page_index": idx });
-        Ok(Event::default()
-            .event("page")
-            .data(payload.to_string()))
+        Ok(Event::default().event("page").data(payload.to_string()))
     }))
     .chain(stream::once(async move {
         let payload = serde_json::json!({
@@ -237,9 +235,7 @@ pub async fn stream_events(
             "window": window_bounds,
             "total_events": total_events,
         });
-        Ok(Event::default()
-            .event("done")
-            .data(payload.to_string()))
+        Ok(Event::default().event("done").data(payload.to_string()))
     }));
 
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))

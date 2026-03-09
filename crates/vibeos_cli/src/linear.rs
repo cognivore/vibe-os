@@ -234,7 +234,10 @@ impl LinearClient {
             .unwrap_or(false);
 
         if !success {
-            anyhow::bail!("issueRelationCreate returned success=false for type '{}'", relation_type);
+            anyhow::bail!(
+                "issueRelationCreate returned success=false for type '{}'",
+                relation_type
+            );
         }
 
         Ok(())

@@ -298,14 +298,10 @@ impl CliCommand for LinearCommand {
                     easy_send::match_issue_identifiers(&request.dependencies, &issues)?;
 
                 // Match all relation identifiers (validate before creating issue)
-                let supersedes =
-                    easy_send::match_issue_identifiers(&request.supersedes, &issues)?;
-                let builds_on =
-                    easy_send::match_issue_identifiers(&request.builds_on, &issues)?;
-                let enables =
-                    easy_send::match_issue_identifiers(&request.enables, &issues)?;
-                let related =
-                    easy_send::match_issue_identifiers(&request.related, &issues)?;
+                let supersedes = easy_send::match_issue_identifiers(&request.supersedes, &issues)?;
+                let builds_on = easy_send::match_issue_identifiers(&request.builds_on, &issues)?;
+                let enables = easy_send::match_issue_identifiers(&request.enables, &issues)?;
+                let related = easy_send::match_issue_identifiers(&request.related, &issues)?;
 
                 // Match cycle if specified (must be for the same team)
                 let cycle_id = request
@@ -318,7 +314,9 @@ impl CliCommand for LinearCommand {
                 let description = if let Some(ref notes) = request.notes {
                     format!(
                         "# Why\n\n{}\n\n# What\n\n{}\n\n# Notes\n\n{}",
-                        request.why, request.what, notes.trim()
+                        request.why,
+                        request.what,
+                        notes.trim()
                     )
                 } else {
                     format!("# Why\n\n{}\n\n# What\n\n{}", request.why, request.what)
@@ -445,13 +443,10 @@ impl CliCommand for LinearCommand {
                 let input = easy_send::read_input_from_file_or_stdin(file.as_deref())?;
 
                 // Parse YAML to get why/what
-                let yaml: serde_yaml::Value = serde_yaml::from_str(&input)
-                    .context("Failed to parse YAML")?;
+                let yaml: serde_yaml::Value =
+                    serde_yaml::from_str(&input).context("Failed to parse YAML")?;
 
-                let why = yaml["why"]
-                    .as_str()
-                    .context("Missing 'why' field")?
-                    .trim();
+                let why = yaml["why"].as_str().context("Missing 'why' field")?.trim();
                 let what = yaml["what"]
                     .as_str()
                     .context("Missing 'what' field")?
@@ -483,7 +478,10 @@ impl CliCommand for LinearCommand {
                 let issue = issues
                     .iter()
                     .find(|i| i.identifier == *identifier)
-                    .context(format!("Issue {} not found in mirror. Run `linear sync` first.", identifier))?;
+                    .context(format!(
+                        "Issue {} not found in mirror. Run `linear sync` first.",
+                        identifier
+                    ))?;
 
                 let api_key = config::linear_api_key()?;
                 let client = linear::LinearClient::new(api_key);
@@ -492,14 +490,20 @@ impl CliCommand for LinearCommand {
                 println!("Deleted issue {} ({})", identifier, issue.title);
                 Ok(())
             }
-            LinearCommand::DeleteMatching { team, title, confirm } => {
+            LinearCommand::DeleteMatching {
+                team,
+                title,
+                confirm,
+            } => {
                 let cfg = ctx.config()?;
 
                 // Load issues and find all matching the criteria
                 let issues = linear_analysis::load_issues(&cfg.linear_mirror_dir)?;
                 let matching: Vec<_> = issues
                     .iter()
-                    .filter(|i| i.identifier.starts_with(&format!("{}-", team)) && i.title == *title)
+                    .filter(|i| {
+                        i.identifier.starts_with(&format!("{}-", team)) && i.title == *title
+                    })
                     .collect();
 
                 if matching.is_empty() {
@@ -507,9 +511,19 @@ impl CliCommand for LinearCommand {
                     return Ok(());
                 }
 
-                println!("Found {} issues matching team={} title=\"{}\":", matching.len(), team, title);
+                println!(
+                    "Found {} issues matching team={} title=\"{}\":",
+                    matching.len(),
+                    team,
+                    title
+                );
                 for issue in &matching {
-                    println!("  {} - {} ({})", issue.identifier, issue.title, issue.state_name.as_deref().unwrap_or("Unknown"));
+                    println!(
+                        "  {} - {} ({})",
+                        issue.identifier,
+                        issue.title,
+                        issue.state_name.as_deref().unwrap_or("Unknown")
+                    );
                 }
 
                 if !confirm {
@@ -554,9 +568,7 @@ impl CliCommand for LinearCommand {
                     let team_states: Vec<_> = issues
                         .iter()
                         .filter(|i| i.team_id == issue.team_id)
-                        .filter_map(|i| {
-                            i.state_id.as_ref().zip(i.state_name.as_ref())
-                        })
+                        .filter_map(|i| i.state_id.as_ref().zip(i.state_name.as_ref()))
                         .collect::<std::collections::HashSet<_>>()
                         .into_iter()
                         .collect();
@@ -567,7 +579,8 @@ impl CliCommand for LinearCommand {
                         .collect();
 
                     if matching.is_empty() {
-                        let available: Vec<_> = team_states.iter().map(|(_, n)| n.as_str()).collect();
+                        let available: Vec<_> =
+                            team_states.iter().map(|(_, n)| n.as_str()).collect();
                         anyhow::bail!(
                             "State '{}' not found. Available: {}",
                             state_name,

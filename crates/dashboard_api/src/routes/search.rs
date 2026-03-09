@@ -110,15 +110,11 @@ pub async fn stream_search(
 
     let event_stream = stream::iter(pages.into_iter().enumerate().map(|(idx, hits)| {
         let payload = serde_json::json!({ "hits": hits, "page_index": idx });
-        Ok(Event::default()
-            .event("page")
-            .data(payload.to_string()))
+        Ok(Event::default().event("page").data(payload.to_string()))
     }))
     .chain(stream::once(async move {
         let payload = serde_json::json!({ "total": total });
-        Ok(Event::default()
-            .event("done")
-            .data(payload.to_string()))
+        Ok(Event::default().event("done").data(payload.to_string()))
     }));
 
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
@@ -194,11 +190,7 @@ async fn enrich_slack_thread_names(result: &mut SearchResult, state: &AppState) 
                         None
                     }
                     Err(err) => {
-                        tracing::debug!(
-                            "Thread enrichment task failed for {}: {}",
-                            entity_id,
-                            err
-                        );
+                        tracing::debug!("Thread enrichment task failed for {}: {}", entity_id, err);
                         None
                     }
                 }
@@ -262,9 +254,7 @@ pub async fn get_thread_titles(
         .map(|thread_id| {
             let slack_mirror_dir = Arc::clone(&slack_mirror_dir);
             let state = Arc::clone(&state);
-            async move {
-                fetch_single_thread_title(&thread_id, &slack_mirror_dir, &state).await
-            }
+            async move { fetch_single_thread_title(&thread_id, &slack_mirror_dir, &state).await }
         })
         .buffer_unordered(MAX_CONCURRENT_TITLE_LOOKUPS)
         .collect()
@@ -308,7 +298,14 @@ async fn fetch_single_thread_title(
                 "Failed to load thread {} from mirror for title lookup, trying API",
                 thread_id
             );
-            match fetch_thread_via_api_if_possible(state, &channel_id, &thread_ts, "fetching Slack thread title").await {
+            match fetch_thread_via_api_if_possible(
+                state,
+                &channel_id,
+                &thread_ts,
+                "fetching Slack thread title",
+            )
+            .await
+            {
                 Ok(events) => events,
                 Err(api_err) => {
                     tracing::debug!(
