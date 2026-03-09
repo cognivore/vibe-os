@@ -11,6 +11,8 @@ pub const CONVERSATIONS_REPLIES: &str = "conversations.replies";
 pub const CONVERSATIONS_JOIN: &str = "conversations.join";
 pub const CONVERSATION_TYPES: &str = "public_channel,private_channel,im,mpim";
 pub const USERS_LIST: &str = "users.list";
+pub const CHAT_POST_MESSAGE: &str = "chat.postMessage";
+pub const CHAT_UPDATE: &str = "chat.update";
 pub const DEFAULT_RETRY_AFTER_SECS: u64 = 60;
 pub const CONVERSATIONS_DIR: &str = "conversations";
 pub const THREADS_DIR: &str = "threads";
@@ -89,5 +91,18 @@ pub(super) struct UsersListResponse {
     pub ok: bool,
     pub members: Option<Vec<Value>>,
     pub response_metadata: Option<ResponseMetadata>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ChatPostMessageResponse {
+    pub ok: bool,
+    pub ts: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ChatUpdateResponse {
+    pub ok: bool,
     pub error: Option<String>,
 }

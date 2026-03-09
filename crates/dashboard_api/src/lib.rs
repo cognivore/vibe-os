@@ -108,6 +108,12 @@ pub async fn run_dashboard_server(settings: DashboardServerSettings) -> Result<(
 
     // Start background Slack sync task if token available
     if let Some(token) = settings.slack_token {
+        let fap_token = token.clone();
+        let fap_mirror_dir = settings.slack_mirror_dir.clone();
+        tokio::spawn(async move {
+            background_fap_scheduler(fap_token, fap_mirror_dir).await;
+        });
+
         let mirror_dir = settings.slack_mirror_dir.clone();
         let sync_state = state.clone();
         tokio::spawn(async move {
@@ -295,6 +301,72 @@ pub async fn run_linear_sync(api_key: &str, mirror_dir: &Path) -> Result<()> {
 
     if !status.success() {
         anyhow::bail!("Linear mirror sync exited with status: {}", status);
+    }
+
+    Ok(())
+}
+
+async fn background_fap_scheduler(token: String, mirror_dir: PathBuf) {
+    use chrono::{Datelike, Local, Weekday};
+
+    const FAP_CHECK_INTERVAL_SECS: u64 = 5 * 60;
+    info!(
+        "Starting FAP auto-post scheduler (checking every {} minutes)",
+        FAP_CHECK_INTERVAL_SECS / 60
+    );
+
+    sleep(Duration::from_secs(60)).await;
+
+    let mut last_posted_week: Option<(i32, u32)> = None;
+
+    loop {
+        let now = Local::now();
+        if now.weekday() == Weekday::Mon {
+            let iso = now.iso_week();
+            let current_week = (iso.year(), iso.week());
+
+            if last_posted_week != Some(current_week) {
+                info!(
+                    "Monday detected, posting FAP messages for week {}...",
+                    iso.week()
+                );
+                match run_fap_post(&token, &mirror_dir).await {
+                    Ok(()) => {
+                        info!("FAP auto-post completed for week {}", iso.week());
+                        last_posted_week = Some(current_week);
+                    }
+                    Err(e) => error!("FAP auto-post failed: {}", e),
+                }
+            }
+        }
+
+        sleep(Duration::from_secs(FAP_CHECK_INTERVAL_SECS)).await;
+    }
+}
+
+async fn run_fap_post(token: &str, mirror_dir: &Path) -> Result<()> {
+    info!("Running FAP auto-post for {}", mirror_dir.display());
+
+    use tokio::process::Command;
+    let vibeos_path = std::env::current_dir()?.join("target/debug/vibeos");
+
+    let output = Command::new(&vibeos_path)
+        .arg("slack")
+        .arg("fap-post")
+        .env("VIBEOS_SLACK_TOKEN", token)
+        .env("VIBEOS_SLACK_MIRROR_DIR", mirror_dir.display().to_string())
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.is_empty() {
+        info!("FAP post stdout: {}", stdout);
+    }
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!("FAP post stderr: {}", stderr);
+        anyhow::bail!("FAP post exited with status: {}", output.status);
     }
 
     Ok(())

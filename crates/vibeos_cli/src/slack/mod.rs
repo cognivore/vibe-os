@@ -1,5 +1,6 @@
 mod api;
 mod client;
+pub mod fap;
 mod mirror;
 mod storage;
 mod types;

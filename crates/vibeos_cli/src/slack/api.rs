@@ -5,10 +5,12 @@ use tokio::time::{sleep, Duration};
 
 use super::client::SlackClient;
 use super::types::{
-    ConversationsHistoryResponse, ConversationsJoinResponse, ConversationsListResponse,
-    ConversationsRepliesResponse, ResponseMetadata, SlackConversation, SlackMessage,
-    UsersListResponse, API_BASE, CONVERSATIONS_HISTORY, CONVERSATIONS_JOIN, CONVERSATIONS_LIST,
-    CONVERSATIONS_REPLIES, CONVERSATION_TYPES, DEFAULT_RETRY_AFTER_SECS, USERS_LIST,
+    ChatPostMessageResponse, ChatUpdateResponse, ConversationsHistoryResponse,
+    ConversationsJoinResponse, ConversationsListResponse, ConversationsRepliesResponse,
+    ResponseMetadata, SlackConversation, SlackMessage, UsersListResponse, API_BASE,
+    CHAT_POST_MESSAGE, CHAT_UPDATE, CONVERSATIONS_HISTORY, CONVERSATIONS_JOIN,
+    CONVERSATIONS_LIST, CONVERSATIONS_REPLIES, CONVERSATION_TYPES, DEFAULT_RETRY_AFTER_SECS,
+    USERS_LIST,
 };
 
 impl SlackClient {
@@ -271,6 +273,89 @@ impl SlackClient {
         }
 
         Ok(all_users)
+    }
+
+    pub(super) async fn post_message(&self, channel: &str, text: &str) -> Result<String> {
+        let body = serde_json::json!({
+            "channel": channel,
+            "text": text,
+        });
+
+        let response = self
+            .execute_request(
+                self.http
+                    .post(api_url(CHAT_POST_MESSAGE))
+                    .header("Authorization", format!("Bearer {}", self.token))
+                    .json(&body),
+                CHAT_POST_MESSAGE,
+            )
+            .await?;
+
+        let resp: ChatPostMessageResponse = response
+            .json()
+            .await
+            .context("Failed to parse chat.postMessage response")?;
+
+        if !resp.ok {
+            anyhow::bail!(
+                "chat.postMessage returned ok=false: {}",
+                resp.error.as_deref().unwrap_or("unknown error")
+            );
+        }
+
+        resp.ts
+            .ok_or_else(|| anyhow::anyhow!("chat.postMessage response missing ts"))
+    }
+
+    pub(super) async fn update_message(
+        &self,
+        channel: &str,
+        ts: &str,
+        text: &str,
+    ) -> Result<()> {
+        let body = serde_json::json!({
+            "channel": channel,
+            "ts": ts,
+            "text": text,
+        });
+
+        let response = self
+            .execute_request(
+                self.http
+                    .post(api_url(CHAT_UPDATE))
+                    .header("Authorization", format!("Bearer {}", self.token))
+                    .json(&body),
+                CHAT_UPDATE,
+            )
+            .await?;
+
+        let resp: ChatUpdateResponse = response
+            .json()
+            .await
+            .context("Failed to parse chat.update response")?;
+
+        if !resp.ok {
+            anyhow::bail!(
+                "chat.update returned ok=false: {}",
+                resp.error.as_deref().unwrap_or("unknown error")
+            );
+        }
+
+        Ok(())
+    }
+
+    pub(super) async fn find_channel_by_name(&self, name: &str) -> Result<String> {
+        let conversations = self.list_all_conversations().await?;
+        conversations
+            .iter()
+            .find(|c| c.name.as_deref() == Some(name))
+            .map(|c| c.id.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Channel #{} not found. Set VIBEOS_FAP_CHANNEL to the channel ID instead.",
+                    name
+                )
+            })
     }
 
     pub(super) async fn execute_request(

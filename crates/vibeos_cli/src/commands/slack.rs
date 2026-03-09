@@ -39,6 +39,26 @@ pub enum SlackCommand {
         #[arg(long)]
         mirror_only: bool,
     },
+    /// Post weekly FAP channel messages (RETRO, SPRINT, MTG, FAP)
+    FapPost {
+        /// Optional output directory (for state file). Defaults to VIBEOS_SLACK_MIRROR_DIR
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+        /// Force posting even if messages already exist for this week
+        #[arg(long)]
+        force: bool,
+    },
+    /// Update this week's FAP messages with the chosen MTG card from Scryfall
+    FapUpdate {
+        /// Scryfall card URL (e.g. https://scryfall.com/card/dtc/57/downsize)
+        scryfall_url: String,
+        /// Custom Slack emoji for the card (e.g. :manau:)
+        #[arg(long)]
+        emoji: Option<String>,
+        /// Optional output directory (for state file). Defaults to VIBEOS_SLACK_MIRROR_DIR
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+    },
 }
 
 #[async_trait]
@@ -57,6 +77,25 @@ impl CliCommand for SlackCommand {
                 let token = config::slack_token()?;
                 let client = slack::SlackClient::new(token);
                 client.join_all_public_channels().await
+            }
+            SlackCommand::FapPost { output_dir, force } => {
+                let output_path = resolve_output_dir(output_dir.clone())?;
+                ensure_directory(&output_path)?;
+                let token = config::slack_token()?;
+                let client = slack::SlackClient::new(token);
+                client.fap_post(&output_path, *force).await
+            }
+            SlackCommand::FapUpdate {
+                scryfall_url,
+                emoji,
+                output_dir,
+            } => {
+                let output_path = resolve_output_dir(output_dir.clone())?;
+                let token = config::slack_token()?;
+                let client = slack::SlackClient::new(token);
+                client
+                    .fap_update(&output_path, scryfall_url, emoji.as_deref())
+                    .await
             }
             SlackCommand::ThreadFetch {
                 channel,
