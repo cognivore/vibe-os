@@ -91,6 +91,7 @@ impl CliCommand for SlackCommand {
                 output_dir,
             } => {
                 let output_path = resolve_output_dir(output_dir.clone())?;
+                ensure_directory(&output_path)?;
                 let token = config::slack_token()?;
                 let client = slack::SlackClient::new(token);
                 client
