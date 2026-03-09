@@ -27,3 +27,4 @@ dashboard/dist/
 *.txt
 
 priv/candidates/*
+priv/*yaml
