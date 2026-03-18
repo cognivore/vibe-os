@@ -125,6 +125,17 @@ pub enum LinearCommand {
         #[arg(long)]
         confirm: bool,
     },
+    /// Add a comment to an issue by identifier (e.g., NIN-184)
+    EasyComment {
+        /// Issue identifier (e.g., NIN-184, INF-138)
+        identifier: String,
+        /// Comment body as inline string (mutually exclusive with --file)
+        #[arg(long, short = 'm')]
+        message: Option<String>,
+        /// Path to file containing comment body (mutually exclusive with --message)
+        #[arg(long, short = 'f')]
+        file: Option<PathBuf>,
+    },
     /// Edit issue state, priority, or assignee by identifier
     EditIssue {
         /// Issue identifier (e.g., INF-83, NIN-104)
@@ -542,6 +553,55 @@ impl CliCommand for LinearCommand {
                 }
 
                 println!("\nDone. Run `linear sync` to update local mirror.");
+                Ok(())
+            }
+            LinearCommand::EasyComment {
+                identifier,
+                message,
+                file,
+            } => {
+                let body = match (message, file) {
+                    (Some(msg), None) => msg.clone(),
+                    (None, Some(path)) => {
+                        std::fs::read_to_string(path)
+                            .context("Failed to read comment file")?
+                    }
+                    (None, None) => {
+                        let mut buf = String::new();
+                        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                            .context("Failed to read comment from stdin")?;
+                        buf
+                    }
+                    (Some(_), Some(_)) => {
+                        anyhow::bail!("Cannot specify both --message and --file");
+                    }
+                };
+
+                let body = body.trim();
+                if body.is_empty() {
+                    anyhow::bail!("Comment body is empty");
+                }
+
+                let cfg = ctx.config()?;
+                let issues = linear_analysis::load_issues(&cfg.linear_mirror_dir)?;
+                let issue = issues
+                    .iter()
+                    .find(|i| i.identifier == *identifier)
+                    .context(format!(
+                        "Issue {} not found in mirror. Run `linear sync` first.",
+                        identifier
+                    ))?;
+
+                let api_key = config::linear_api_key()?;
+                let client = linear::LinearClient::new(api_key);
+                let comment = client.create_comment(&issue.id, body).await?;
+
+                println!("Comment added to {}", identifier);
+                println!("  Comment ID: {}", comment.id);
+                if let Some(url) = comment.url {
+                    println!("  URL: {}", url);
+                }
+
                 Ok(())
             }
             LinearCommand::EditIssue {

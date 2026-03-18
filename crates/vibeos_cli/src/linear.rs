@@ -42,6 +42,13 @@ pub struct LinearIssue {
     pub url: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LinearComment {
+    pub id: String,
+    pub body: String,
+    pub url: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct GraphQLRequest {
     query: &'static str,
@@ -293,6 +300,47 @@ impl LinearClient {
             identifier: issue_data.identifier,
             title: issue_data.title,
             url: issue_data.url,
+        })
+    }
+
+    /// Create a comment on an issue
+    pub async fn create_comment(&self, issue_id: &str, body: &str) -> Result<LinearComment> {
+        const QUERY: &str = r#"mutation CommentCreate($input: CommentCreateInput!) {
+            commentCreate(input: $input) {
+                success
+                comment {
+                    id
+                    body
+                    url
+                }
+            }
+        }"#;
+
+        let input = serde_json::json!({
+            "issueId": issue_id,
+            "body": body,
+        });
+
+        let data: serde_json::Value = self
+            .graphql_query(QUERY, serde_json::json!({ "input": input }))
+            .await?;
+
+        let success = data["commentCreate"]["success"]
+            .as_bool()
+            .unwrap_or(false);
+
+        if !success {
+            anyhow::bail!("commentCreate returned success=false");
+        }
+
+        let comment = data["commentCreate"]["comment"]
+            .as_object()
+            .context("Missing comment in response")?;
+
+        Ok(LinearComment {
+            id: comment["id"].as_str().unwrap_or_default().to_string(),
+            body: comment["body"].as_str().unwrap_or_default().to_string(),
+            url: comment["url"].as_str().map(|s| s.to_string()),
         })
     }
 
