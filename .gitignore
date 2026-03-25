@@ -23,6 +23,7 @@ dashboard/dist/
 !README.md
 !DESIGN.md
 !REGISTER_WITH_LOCAL_CADDY.md
+!.cursor/skills/**/*.md
 
 *.txt
 
